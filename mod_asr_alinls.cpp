@@ -109,15 +109,15 @@ void onAsrSentenceBegin(NlsEvent* cbEvent, void* cbParam)
                     cbEvent->getSentenceTime());
 }
 
-const char *dupAsrResult(const char *allResponse) 
+char *dupAsrResult(const char *allResponse) 
 {
-    char *begin = strstr(allResponse, "\"result\":\"");
-    if (!begin) {
+    const char *p = strstr(allResponse, "\"result\":\"");
+    if (!p) {
         return strdup("");
-    } else {
-        begin += 10;
-    }
-    char *end = strchr(begin, '\"');
+    } 
+    
+    const char *begin = p + 10;
+    const char *end = strchr(begin, '\"');
 
     if (!end) {
         return strdup("");
@@ -154,7 +154,7 @@ void onAsrSentenceEnd(NlsEvent* cbEvent, void* cbParam)
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
 
-        const char *result = dupAsrResult(cbEvent->getAllResponse());
+        char *result = dupAsrResult(cbEvent->getAllResponse());
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
         free(result);
 
@@ -191,7 +191,7 @@ void onAsrTranscriptionResultChanged(NlsEvent* cbEvent, void* cbParam)
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
 
-        const char *result = dupAsrResult(cbEvent->getAllResponse());
+        char *result = dupAsrResult(cbEvent->getAllResponse());
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
         free(result);
         // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
