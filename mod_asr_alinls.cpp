@@ -395,42 +395,16 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     {
         case SWITCH_ABC_TYPE_INIT: 
         {
-            switch_codec_t *read_codec;
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Channel Init:%s\n", switch_channel_get_name(channel));
-            // switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "[[mediabugudp_callback-->SWITCH_ABC_TYPE_INIT]] init,|uuid_in[%s]|uuid_this[%s]\n",uuid_1,uuid_2);
-            read_codec = switch_core_session_get_read_codec(pvt->session);
+
+            switch_codec_t *read_codec = switch_core_session_get_read_codec(pvt->session);
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "read_codec=[%s]!\n",read_codec->implementation->iananame);
-            /*
-            ////###############################################################
-                if(strcmp(read_codec->implementation->iananame,"PCMA")==0 || strcmp(read_codec->implementation->iananame,"pcma")==0)
-        {
-            strcpy(udp_info->mediaType,"8");
-                }
-                else if(strcmp(read_codec->implementation->iananame,"PCMU")==0 || strcmp(read_codec->implementation->iananame,"pcmu")==0)
-        {
-            strcpy(udp_info->mediaType,"0");
-        }
-                else
-        {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "[[mediabugudp_callback-->SWITCH_ABC_TYPE_INIT]]read_codec is[%s] neither PCMA nor PCMU,mediabug will end!\n",
-                                          read_codec->implementation->iananame);
-                return SWITCH_FALSE;
-        }
-                if(socket_init(udp_info) < 0){
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mediabugudp function start and socket created failed!\n");
-                return SWITCH_FALSE;
-        }
-                udp_info->seq=0;
-                time(&udp_info->timestamp);
-                memset(udp_info->udp_key,0x00,sizeof(udp_info->udp_key));
-                strcpy(udp_info->udp_key,"SWITCH_ABC_TYPE_INIT");
-        ////###############################################################
-             */
-            if(pvt->stoped ==1 ) 
-            {
+
+            if (pvt->stoped ==1) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "SWITCH_ABC_TYPE_INIT: pvt->stoped\n");
                 return SWITCH_TRUE;
             }
+
             switch_mutex_lock(pvt->mutex);
             if(pvt->started ==0 ) 
             {
