@@ -108,18 +108,24 @@ void onAsrSentenceBegin(NlsEvent* cbEvent, void* cbParam)
                     cbEvent->getSentenceIndex(),
                     cbEvent->getSentenceTime());
 }
-const char *unwrapAsrResult(const char *allResponse) 
+
+const char *dupAsrResult(const char *allResponse) 
 {
-    std::string resp = allResponse;
-    size_t begin = resp.find("\"result\":\"");
-   if (std::string::npos == begin)
-       return strdup(resp.c_str());
-   std::string withsuffix = resp.substr(begin + 10);
-   size_t end = withsuffix.find("\"");
-    if (std::string::npos == end)
-          return strdup(withsuffix.c_str());
-    return strdup(withsuffix.substr(0, end).c_str());
+    char *begin = strstr(allResponse, "\"result\":\"");
+    if (!begin) {
+        return strdup("");
+    } else {
+        begin += 10;
+    }
+    char *end = strchr(begin, '\"');
+
+    if (!end) {
+        return strdup("");
+    }
+
+    return strndup(begin, end - begin);
 }
+
 /**
  * @brief 一句话结束回调函数
  * 
@@ -147,14 +153,19 @@ void onAsrSentenceEnd(NlsEvent* cbEvent, void* cbParam)
         strcat(event->subclass_name, tmpParam->sUUID);
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
-        // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", unwrapAsrResult(cbEvent->getAllResponse()));
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
+
+        const char *result = dupAsrResult(cbEvent->getAllResponse());
+        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
+        free(result);
+
+        // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
         //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
         //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
         switch_event_fire(&event);
     }
 }
+
 /**
  * @brief 识别结果变化回调函数
  * 
@@ -179,8 +190,11 @@ void onAsrTranscriptionResultChanged(NlsEvent* cbEvent, void* cbParam)
         event->subclass_name = strdup("update_asr");
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
-        // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", unwrapAsrResult(cbEvent->getAllResponse()));
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
+
+        const char *result = dupAsrResult(cbEvent->getAllResponse());
+        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
+        free(result);
+        // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
         //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
         //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
