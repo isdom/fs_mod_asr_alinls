@@ -472,7 +472,6 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
             switch_frame_t frame = { 0 };
             frame.data = data;
             frame.buflen = sizeof(data);
-            // switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "SWITCH_ABC_TYPE_READ: send audio\n");
             if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) != SWITCH_STATUS_FALSE) 
             {
                 switch_mutex_lock(pvt->mutex);
@@ -511,6 +510,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     pvt->request->stop();
                     NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
                 }
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "SWITCH_ABC_TYPE_READ: send audio %d\n", datalen);
                 switch_mutex_unlock(pvt->mutex);
             } else 
             {
