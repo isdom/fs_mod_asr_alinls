@@ -1,0 +1,9 @@
+<configuration name="aliasr.conf" description="mod_asr_asr configuration">
+    <settings>
+        <param name="appkey" value="appkey_for_nls"/>
+        <param name="akid" value="akid"/>
+        <param name="aksecret" value="aksecret"/>
+        <param name="nlsurl" value="ws url"/>
+        <param name="debug" value="false"/>
+   </settings>
+</configuration>
