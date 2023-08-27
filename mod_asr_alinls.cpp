@@ -42,6 +42,7 @@ std::string g_akId = "";
 std::string g_akSecret = "";
 std::string g_token = "";
 std::string g_nlsUrl="";
+bool        g_debug = false;
 long g_expireTime = -1;
 
 SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam);
@@ -390,6 +391,13 @@ static switch_status_t load_config()
             g_nlsUrl=  val;
             continue;
         }
+        if (!strcasecmp(var, "debug")) 
+        {
+            if (!strcasecmp(val, "true")) {
+                g_debug = true;
+            }
+            continue;
+        }
     }
     return SWITCH_STATUS_SUCCESS;
 }
@@ -510,7 +518,9 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     pvt->request->stop();
                     NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
                 }
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "SWITCH_ABC_TYPE_READ: send audio %d\n", datalen);
+                if (g_debug) {
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "SWITCH_ABC_TYPE_READ: send audio %d\n", datalen);
+                }
                 switch_mutex_unlock(pvt->mutex);
             } else 
             {
