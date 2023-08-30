@@ -151,24 +151,29 @@ void onAsrSentenceEnd(NlsEvent* cbEvent, void* cbParam)
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrSentenceEnd: all response=%s\n", cbEvent->getAllResponse());
     switch_event_t *event = NULL;
     switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    switch_channel_t *channel = switch_core_session_get_channel(ses);
-    if(switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) 
-    {
-        event->subclass_name = (char*)malloc(strlen("start_asr_") + strlen(tmpParam->sUUID) + 1);
-        strcpy(event->subclass_name, "start_asr_");
-        strcat(event->subclass_name, tmpParam->sUUID);
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
-
-        char *result = dupAsrResult(cbEvent->getAllResponse());
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
-        free(result);
-
-        // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
-        //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
-        //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
-        switch_event_fire(&event);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if(switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) 
+        {
+            event->subclass_name = (char*)malloc(strlen("start_asr_") + strlen(tmpParam->sUUID) + 1);
+            strcpy(event->subclass_name, "start_asr_");
+            strcat(event->subclass_name, tmpParam->sUUID);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
+    
+            char *result = dupAsrResult(cbEvent->getAllResponse());
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
+            free(result);
+    
+            // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
+            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
+            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
+            switch_event_fire(&event);
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
     }
 }
 
@@ -190,21 +195,26 @@ void onAsrTranscriptionResultChanged(NlsEvent* cbEvent, void* cbParam)
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrTranscriptionResultChanged: all response=%s\n", cbEvent->getAllResponse());
     switch_event_t *event = NULL;
     switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    switch_channel_t *channel = switch_core_session_get_channel(ses);
-    if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) 
-    {
-        event->subclass_name = strdup("update_asr");
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
-
-        char *result = dupAsrResult(cbEvent->getAllResponse());
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
-        free(result);
-        // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
-        //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
-        //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
-        switch_event_fire(&event);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) 
+        {
+            event->subclass_name = strdup("update_asr");
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
+    
+            char *result = dupAsrResult(cbEvent->getAllResponse());
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
+            free(result);
+            // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
+            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
+            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
+            switch_event_fire(&event);
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);    
     }
 }
 /**
@@ -220,12 +230,17 @@ void onAsrTranscriptionCompleted(NlsEvent* cbEvent, void* cbParam)
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionCompleted: status code=%d, task id=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId());
     switch_da_t *pvt;
     switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    switch_channel_t *channel = switch_core_session_get_channel(ses);
-    if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr"))) 
-    {
-        //        if(pvt->frameDataBuffer){
-        //            free(pvt->frameDataBuffer);
-        //        }
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr"))) 
+        {
+            //        if(pvt->frameDataBuffer){
+            //            free(pvt->frameDataBuffer);
+            //        }
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
     }
 }
 /**
