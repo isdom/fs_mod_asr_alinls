@@ -43,7 +43,7 @@ std::string g_akSecret = "";
 std::string g_token = "";
 std::string g_nlsUrl="";
 bool        g_debug = false;
-long g_expireTime = -1;
+long        g_expireTime = -1;
 
 SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam);
 
@@ -509,7 +509,9 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     memcpy(dp, pvt->resampler->to, pvt->resampler->to_len * 2 * 1);
                     int samples = pvt->resampler->to_len;
                     datalen = pvt->resampler->to_len * 2 * 1;
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "ASR new samples:%d\n", samples);
+                    if (g_debug) {
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", samples);
+                    }
                 }
                 if (pvt->request->sendAudio((uint8_t *)dp, (size_t)datalen) <0) 
                 {
