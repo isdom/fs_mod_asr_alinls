@@ -85,14 +85,19 @@ void onTranscriptionStarted(NlsEvent* cbEvent, void* cbParam)
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionStarted: all response=%s\n", cbEvent->getAllResponse());
     switch_da_t *pvt;
     switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    switch_channel_t *channel = switch_core_session_get_channel(ses);
-    if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr"))) 
-    {
-        switch_mutex_lock(pvt->mutex);
-        pvt->started = 1;
-        pvt->starting = 0;
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"I need lock!!!!!!!!!!!! \n"  );
-        switch_mutex_unlock(pvt->mutex);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr"))) 
+        {
+            switch_mutex_lock(pvt->mutex);
+            pvt->started = 1;
+            pvt->starting = 0;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"I need lock!!!!!!!!!!!! \n"  );
+            switch_mutex_unlock(pvt->mutex);
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
     }
 }
 /**
