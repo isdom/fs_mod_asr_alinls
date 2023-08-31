@@ -9,7 +9,7 @@
 
 2. 下载`mod_asr`代码
 ```
-git clone http://gitlab.yshome.com:8081/elegant/mod_asr.git
+git clone https://github.com/isdom/fs_mod_asr_alinls
 ```
 3. 编译
 FreeSWITCH和NlsSdkCpp3.x路径根据自己情况修改
