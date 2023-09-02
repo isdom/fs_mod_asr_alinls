@@ -159,7 +159,7 @@ void onAsrSentenceEnd(NlsEvent* cbEvent, void* cbParam)
             strcpy(event->subclass_name, "start_asr_");
             strcat(event->subclass_name, tmpParam->sUUID);
             switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", tmpParam->sUUID);
     
             char *result = dupAsrResult(cbEvent->getAllResponse());
             switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
@@ -201,7 +201,7 @@ void onAsrTranscriptionResultChanged(NlsEvent* cbEvent, void* cbParam)
         {
             event->subclass_name = strdup("update_asr");
             switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "UUID", tmpParam->sUUID);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", tmpParam->sUUID);
     
             char *result = dupAsrResult(cbEvent->getAllResponse());
             switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
