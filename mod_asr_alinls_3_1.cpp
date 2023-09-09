@@ -50,6 +50,7 @@ std::string g_api_version = "";
 std::string g_nlsUrl="";
 bool        g_debug = false;
 long        g_expireTime = -1;
+float       g_speechNoiseThreshold = 0;
 
 SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam);
 
@@ -368,6 +369,15 @@ SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam)
     // 设置AppKey, 必填参数, 请参照官网申请
     request->setUrl(g_nlsUrl.c_str());
     // 设置ASR 服务地址, 可使用公网 或 ECS 内网地址，具体参见: https://help.aliyun.com/document_detail/84428.html?spm=a2c4g.148847.0.0.1b704938UF5b6y
+    
+    // 噪音参数阈值，参数范围：[-1,1]。取值说明如下：
+    //  取值越趋于-1，噪音被判定为语音的概率越大。
+    //  取值越趋于+1，语音被判定为噪音的概率越大。
+    //  参见 https://help.aliyun.com/document_detail/84428.html
+    if (g_speechNoiseThreshold != 0) {
+        request->setSpeechNoiseThreshold(g_speechNoiseThreshold);
+    }
+    
     request->setFormat("pcm");
     // 设置音频数据编码格式, 默认是pcm
     request->setSampleRate(SAMPLE_RATE);
@@ -379,7 +389,7 @@ SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam)
     request->setInverseTextNormalization(true);
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
     request->setToken(g_token.c_str());
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s\n", g_nlsUrl.c_str());
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, speech_noise_threshold is:%f\n", g_nlsUrl.c_str(), g_speechNoiseThreshold);
     return request;
 }
 //======================================== ali asr end ===============
@@ -444,6 +454,11 @@ static switch_status_t load_config()
             if (!strcasecmp(val, "true")) {
                 g_debug = true;
             }
+            continue;
+        }
+        if (!strcasecmp(var, "speech_noise_threshold"))
+        {
+            g_speechNoiseThreshold = atof(val);
             continue;
         }
     }
