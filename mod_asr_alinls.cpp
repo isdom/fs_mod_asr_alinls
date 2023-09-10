@@ -1,5 +1,6 @@
 #include <switch.h>
 #include <fstream>
+#include <math.h>
 #include "nlsClient.h"
 #include "nlsEvent.h"
 #include "speechTranscriberRequest.h"
@@ -44,6 +45,7 @@ std::string g_token = "";
 std::string g_nlsUrl="";
 bool        g_debug = false;
 long        g_expireTime = -1;
+float       g_vol_multiplier = 1.0f;
 
 SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam);
 
@@ -356,7 +358,7 @@ SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam)
     request->setInverseTextNormalization(true);
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
     request->setToken(g_token.c_str());
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s\n", g_nlsUrl.c_str());
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, vol multiplier is:%f\n", g_nlsUrl.c_str(), g_vol_multiplier);
     return request;
 }
 //======================================== ali asr end ===============
@@ -423,9 +425,30 @@ static switch_status_t load_config()
             }
             continue;
         }
+        if (!strcasecmp(var, "newdb")) 
+        {
+            double db = atof(val);
+            g_vol_multiplier = pow(10,db/20);
+            continue;
+        }
     }
     return SWITCH_STATUS_SUCCESS;
 }
+
+void adjustVolume(int16_t *pcm, size_t pcmlen) {
+    int32_t pcmval;
+    for (ctr = 0; ctr < pcmlen; ctr++) {
+        pcmval = pcm[ctr] * g_vol_multiplier;
+        if (pcmval < 32767 && pcmval > -32768) {
+            pcm[ctr] = pcmval;
+        } else if (pcmval > 32767) {
+            pcm[ctr] = 32767;
+        } else if (pcmval < -32768) {
+            pcm[ctr] = -32768;
+        }
+    }
+}
+
 /**
  * asr 回调处理
  * 
@@ -537,6 +560,9 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     if (g_debug) {
                         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", samples);
                     }
+                }
+                if (g_vol_multiplier != 1.0f) {
+                    adjustVolume((int16_t*)dp, (size_t)datalen / 2);
                 }
                 if (pvt->request->sendAudio((uint8_t *)dp, (size_t)datalen) <0) 
                 {
