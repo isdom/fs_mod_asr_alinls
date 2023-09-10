@@ -5,6 +5,7 @@
         <param name="aksecret" value="aksecret"/>
         <param name="nlsurl" value="ws url"/>
         <param name="debug" value="false"/>
+        <param name="newdb" value="-48"/>
         <param name="max_sentence_silence" value="800"/>
         <param name="speech_noise_threshold" value="1.0"/>
    </settings>
