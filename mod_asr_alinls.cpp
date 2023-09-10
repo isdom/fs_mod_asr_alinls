@@ -437,7 +437,7 @@ static switch_status_t load_config()
 
 void adjustVolume(int16_t *pcm, size_t pcmlen) {
     int32_t pcmval;
-    for (ctr = 0; ctr < pcmlen; ctr++) {
+    for (size_t ctr = 0; ctr < pcmlen; ctr++) {
         pcmval = pcm[ctr] * g_vol_multiplier;
         if (pcmval < 32767 && pcmval > -32768) {
             pcm[ctr] = pcmval;
