@@ -17,6 +17,451 @@
 #include "audio.h"
 #include "nlohmann/json.hpp"
 
+/**
+ * Define a semi-cross platform helper method that waits/sleeps for a bit.
+ */
+void WaitABit() {
+#ifdef WIN32
+  Sleep(1000);
+#else
+  usleep(1000);
+#endif
+}
+
+bool IsTargetFile(const std::string& filename, const std::string target) {
+  std::size_t pos = filename.find_last_of(".");
+  if (pos == std::string::npos) {
+    return false;
+  }
+  std::string extension = filename.substr(pos + 1);
+  return (extension == target);
+}
+
+typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
+typedef websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> context_ptr;
+
+using websocketpp::lib::bind;
+using websocketpp::lib::placeholders::_1;
+using websocketpp::lib::placeholders::_2;
+
+// template for tls or not config
+template <typename T>
+class WebsocketClient {
+ public:
+  // typedef websocketpp::client<T> client;
+  // typedef websocketpp::client<websocketpp::config::asio_tls_client>
+  // wss_client;
+  typedef websocketpp::lib::lock_guard<websocketpp::lib::mutex> scoped_lock;
+
+  WebsocketClient(int is_ssl) : m_open(false), m_done(false) {
+    // set up access channels to only log interesting things
+    m_client.clear_access_channels(websocketpp::log::alevel::all);
+    m_client.set_access_channels(websocketpp::log::alevel::connect);
+    m_client.set_access_channels(websocketpp::log::alevel::disconnect);
+    m_client.set_access_channels(websocketpp::log::alevel::app);
+
+    // Initialize the Asio transport policy
+    m_client.init_asio();
+
+    // Bind the handlers we are using
+    using websocketpp::lib::bind;
+    using websocketpp::lib::placeholders::_1;
+    m_client.set_open_handler(bind(&WebsocketClient::on_open, this, _1));
+    m_client.set_close_handler(bind(&WebsocketClient::on_close, this, _1));
+
+    m_client.set_message_handler(
+        [this](websocketpp::connection_hdl hdl, message_ptr msg) {
+          on_message(hdl, msg);
+        });
+
+    m_client.set_fail_handler(bind(&WebsocketClient::on_fail, this, _1));
+    m_client.clear_access_channels(websocketpp::log::alevel::all);
+  }
+
+  void on_message(websocketpp::connection_hdl hdl, message_ptr msg) {
+    const std::string& payload = msg->get_payload();
+    switch (msg->get_opcode()) {
+      case websocketpp::frame::opcode::text:
+        nlohmann::json jsonresult = nlohmann::json::parse(payload);
+        cout << "Thread: " << this_thread::get_id()
+                  << ",on_message = " << payload << endl;
+        if (jsonresult["is_final"] == true) {
+          websocketpp::lib::error_code ec;
+           
+          m_client.close(hdl, websocketpp::close::status::going_away, "", ec);
+
+          if (ec) {
+            cout << "Error closing connection " << ec.message() << endl;
+          }
+        }
+    }
+  }
+
+  // This method will block until the connection is complete
+  void run(const std::string& uri, const std::vector<string>& wav_list,
+           const std::vector<string>& wav_ids, std::string asr_mode,
+           std::vector<int> chunk_size, bool is_record=false) {
+    // Create a new connection to the given URI
+    websocketpp::lib::error_code ec;
+    typename websocketpp::client<T>::connection_ptr con =
+        m_client.get_connection(uri, ec);
+    if (ec) {
+      m_client.get_alog().write(websocketpp::log::alevel::app,
+                                "Get Connection Error: " + ec.message());
+      return;
+    }
+    // Grab a handle for this connection so we can talk to it in a thread
+    // safe manor after the event loop starts.
+    m_hdl = con->get_handle();
+
+    // Queue the connection. No DNS queries or network connections will be
+    // made until the io_service event loop is run.
+    m_client.connect(con);
+
+    // Create a thread to run the ASIO io_service event loop
+    websocketpp::lib::thread asio_thread(&websocketpp::client<T>::run,
+                                         &m_client);
+//    if(is_record){
+//      send_rec_data(asr_mode, chunk_size);
+//    }else{
+//      send_wav_data(wav_list[0], wav_ids[0], asr_mode, chunk_size);
+//    }
+
+    WaitABit();
+
+    asio_thread.join();
+  }
+
+    // This method will block until the connection is complete
+    int start(const std::string& uri, std::string asr_mode, std::vector<int> chunk_size) {
+      // Create a new connection to the given URI
+      websocketpp::lib::error_code ec;
+      typename websocketpp::client<T>::connection_ptr con =
+          m_client.get_connection(uri, ec);
+      if (ec) {
+        m_client.get_alog().write(websocketpp::log::alevel::app,
+                                  "Get Connection Error: " + ec.message());
+        return -1;
+      }
+      // Grab a handle for this connection so we can talk to it in a thread
+      // safe manor after the event loop starts.
+      m_hdl = con->get_handle();
+
+      // Queue the connection. No DNS queries or network connections will be
+      // made until the io_service event loop is run.
+      m_client.connect(con);
+
+      _asr_mode = asr_mode;
+      _chunk_size = chunk_size;
+        
+      // Create a thread to run the ASIO io_service event loop
+      _asio_thread = new websocketpp::lib::thread(&websocketpp::client<T>::run, &m_client);
+      return 0;
+    }
+    
+    void stop() {
+        if (_asio_thread) {
+            // _asio_thread->stop();
+            delete _asio_thread;
+            _asio_thread = NULL;
+        }
+    }
+
+        // The open handler will signal that we are ready to start sending data
+  void on_open(websocketpp::connection_hdl) {
+    m_client.get_alog().write(websocketpp::log::alevel::app,
+                              "Connection opened, starting data!");
+
+    scoped_lock guard(m_lock);
+    m_open = true;
+  }
+
+  // The close handler will signal that we should stop sending data
+  void on_close(websocketpp::connection_hdl) {
+    m_client.get_alog().write(websocketpp::log::alevel::app,
+                              "Connection closed, stopping data!");
+
+    scoped_lock guard(m_lock);
+    m_done = true;
+  }
+
+  // The fail handler will signal that we should stop sending data
+  void on_fail(websocketpp::connection_hdl) {
+    m_client.get_alog().write(websocketpp::log::alevel::app,
+                              "Connection failed, stopping data!");
+
+    scoped_lock guard(m_lock);
+    m_done = true;
+  }
+  // send wav to server
+  void send_wav_data(string wav_path, string wav_id, std::string asr_mode,
+                     std::vector<int> chunk_vector) {
+    uint64_t count = 0;
+    std::stringstream val;
+
+    funasr::Audio audio(1);
+    int32_t sampling_rate = 16000;
+    std::string wav_format = "pcm";
+    if (IsTargetFile(wav_path.c_str(), "wav")) {
+      int32_t sampling_rate = -1;
+      if (!audio.LoadWav(wav_path.c_str(), &sampling_rate)) return;
+    } else if (IsTargetFile(wav_path.c_str(), "pcm")) {
+      if (!audio.LoadPcmwav(wav_path.c_str(), &sampling_rate)) return;
+    } else {
+        printf("Wrong wav extension");
+        exit(-1);
+    }
+
+    float* buff;
+    int len;
+    int flag = 0;
+    bool wait = false;
+    while (1) {
+      {
+        scoped_lock guard(m_lock);
+        // If the connection has been closed, stop generating data
+        if (m_done) {
+          break;
+        }
+        // If the connection hasn't been opened yet wait a bit and retry
+        if (!m_open) {
+          wait = true;
+        } else {
+          break;
+        }
+      }
+
+      if (wait) {
+        // LOG(INFO) << "wait.." << m_open;
+        WaitABit();
+        continue;
+      }
+    }
+    websocketpp::lib::error_code ec;
+
+    nlohmann::json jsonbegin;
+    nlohmann::json chunk_size = nlohmann::json::array();
+    chunk_size.push_back(chunk_vector[0]);
+    chunk_size.push_back(chunk_vector[1]);
+    chunk_size.push_back(chunk_vector[2]);
+    jsonbegin["mode"] = asr_mode;
+    jsonbegin["chunk_size"] = chunk_size;
+    jsonbegin["wav_name"] = wav_id;
+    jsonbegin["wav_format"] = wav_format;
+    jsonbegin["is_speaking"] = true;
+    m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text,
+                  ec);
+
+    // fetch wav data use asr engine api
+    if (wav_format == "pcm") {
+      while (audio.Fetch(buff, len, flag) > 0) {
+        short* iArray = new short[len];
+        for (size_t i = 0; i < len; ++i) {
+          iArray[i] = (short)(buff[i] * 32768);
+        }
+
+        // send data to server
+        int offset = 0;
+        int block_size = 102400;
+        while (offset < len) {
+          int send_block = 0;
+          if (offset + block_size <= len) {
+            send_block = block_size;
+          } else {
+            send_block = len - offset;
+          }
+          m_client.send(m_hdl, iArray + offset, send_block * sizeof(short),
+                websocketpp::frame::opcode::binary, ec);
+          offset += send_block;
+        }
+
+        cout << "sended data len=" << len * sizeof(short) << endl;
+        if (ec) {
+          m_client.get_alog().write(websocketpp::log::alevel::app,
+                                    "Send Error: " + ec.message());
+          break;
+        }
+        delete[] iArray;
+      }
+    } else {
+      int offset = 0;
+      int block_size = 204800;
+      len = audio.GetSpeechLen();
+      char* others_buff = audio.GetSpeechChar();
+
+      while (offset < len) {
+        int send_block = 0;
+        if (offset + block_size <= len) {
+          send_block = block_size;
+        } else {
+          send_block = len - offset;
+        }
+        m_client.send(m_hdl, others_buff + offset, send_block,
+                      websocketpp::frame::opcode::binary, ec);
+        offset += send_block;
+      }
+
+      cout << "sended data len=" << len << endl;
+      if (ec) {
+        m_client.get_alog().write(websocketpp::log::alevel::app,
+                                  "Send Error: " + ec.message());
+      }
+    }
+
+    nlohmann::json jsonresult;
+    jsonresult["is_speaking"] = false;
+    m_client.send(m_hdl, jsonresult.dump(), websocketpp::frame::opcode::text,
+                  ec);
+    WaitABit();
+  }
+
+#if 0
+  static int RecordCallback(const void* inputBuffer, void* outputBuffer,
+      unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo* timeInfo,
+      PaStreamCallbackFlags statusFlags, void* userData)
+  {
+      std::vector<float>* buffer = static_cast<std::vector<float>*>(userData);
+      const float* input = static_cast<const float*>(inputBuffer);
+
+      for (unsigned int i = 0; i < framesPerBuffer; i++)
+      {
+          buffer->push_back(input[i]);
+      }
+
+      return paContinue;
+  }
+
+  void send_rec_data(std::string asr_mode, std::vector<int> chunk_vector) {
+    // first message
+    bool wait = false;
+    while (1) {
+      {
+        scoped_lock guard(m_lock);
+        // If the connection has been closed, stop generating data
+        if (m_done) {
+          break;
+        }
+        // If the connection hasn't been opened yet wait a bit and retry
+        if (!m_open) {
+          wait = true;
+        } else {
+          break;
+        }
+      }
+
+      if (wait) {
+        // LOG(INFO) << "wait.." << m_open;
+        WaitABit();
+        continue;
+      }
+    }
+    websocketpp::lib::error_code ec;
+
+    nlohmann::json jsonbegin;
+    nlohmann::json chunk_size = nlohmann::json::array();
+    chunk_size.push_back(chunk_vector[0]);
+    chunk_size.push_back(chunk_vector[1]);
+    chunk_size.push_back(chunk_vector[2]);
+    jsonbegin["mode"] = asr_mode;
+    jsonbegin["chunk_size"] = chunk_size;
+    jsonbegin["wav_name"] = "record";
+    jsonbegin["wav_format"] = "pcm";
+    jsonbegin["is_speaking"] = true;
+    m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text,
+                  ec);
+    // mic
+    Microphone mic;
+    PaDeviceIndex num_devices = Pa_GetDeviceCount();
+    cout << "Num devices: " << num_devices << endl;
+
+    PaStreamParameters param;
+
+    param.device = Pa_GetDefaultInputDevice();
+    if (param.device == paNoDevice) {
+      cout << "No default input device found" << endl;
+      exit(EXIT_FAILURE);
+    }
+    cout << "Use default device: " << param.device << endl;
+
+    const PaDeviceInfo *info = Pa_GetDeviceInfo(param.device);
+    cout << "  Name: " << info->name << endl;
+    cout << "  Max input channels: " << info->maxInputChannels << endl;
+
+    param.channelCount = 1;
+    param.sampleFormat = paFloat32;
+
+    param.suggestedLatency = info->defaultLowInputLatency;
+    param.hostApiSpecificStreamInfo = nullptr;
+    float sample_rate = 16000;
+
+    PaStream *stream;
+    std::vector<float> buffer;
+    PaError err =
+        Pa_OpenStream(&stream, &param, nullptr, /* &outputParameters, */
+                      sample_rate,
+                      0,          // frames per buffer
+                      paClipOff,  // we won't output out of range samples
+                                  // so don't bother clipping them
+                      RecordCallback, &buffer);
+    if (err != paNoError) {
+      cout << "portaudio error: " << Pa_GetErrorText(err) << endl;
+      exit(EXIT_FAILURE);
+    }
+
+    err = Pa_StartStream(stream);
+    cout << "Started: " << endl;
+
+    if (err != paNoError) {
+      cout << "portaudio error: " << Pa_GetErrorText(err) << endl;
+      exit(EXIT_FAILURE);
+    }
+
+    while(true){
+      int len = buffer.size();
+      short* iArray = new short[len];
+      for (size_t i = 0; i < len; ++i) {
+        iArray[i] = (short)(buffer[i] * 32768);
+      }
+
+      m_client.send(m_hdl, iArray, len * sizeof(short),
+                    websocketpp::frame::opcode::binary, ec);
+      buffer.clear();
+
+      if (ec) {
+        m_client.get_alog().write(websocketpp::log::alevel::app,
+                                  "Send Error: " + ec.message());
+      }
+      Pa_Sleep(20);  // sleep for 20ms
+    }
+
+    nlohmann::json jsonresult;
+    jsonresult["is_speaking"] = false;
+    m_client.send(m_hdl, jsonresult.dump(), websocketpp::frame::opcode::text,
+                  ec);
+    
+    err = Pa_CloseStream(stream);
+    if (err != paNoError) {
+      cout << "portaudio error: " << Pa_GetErrorText(err) << endl;
+      exit(EXIT_FAILURE);
+    }
+  }
+#endif
+    
+  websocketpp::client<T> m_client;
+  websocketpp::lib::thread *_asio_thread = NULL;
+        
+ private:
+    std::string _asr_mode;
+    std::vector<int> _chunk_size;
+    
+  websocketpp::connection_hdl m_hdl;
+  websocketpp::lib::mutex m_lock;
+  bool m_open;
+  bool m_done;
+  int total_num = 0;
+};
+
+typedef WebsocketClient<websocketpp::config::asio_client> funasr_client;
 
 #define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
 #define SAMPLE_RATE 8000
@@ -39,7 +484,8 @@ typedef struct
 {
     switch_core_session_t   *session;
     switch_media_bug_t      *bug;
-    SpeechTranscriberRequest *request;
+    // SpeechTranscriberRequest *request;
+    funasr_client           *fac;
     int                     started;
     int                     stoped;
     int                     starting;
@@ -53,37 +499,11 @@ std::string g_appkey = "";
 std::string g_akId = "";
 std::string g_akSecret = "";
 std::string g_token = "";
-std::string g_nlsUrl="";
+std::string g_asrurl="";
 bool        g_debug = false;
 long        g_expireTime = -1;
 float       g_vol_multiplier = 1.0f;
 
-SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam);
-
-//请求token
-int generateToken(std::string akId, std::string akSecret, std::string* token, long* expireTime) 
-{
-    NlsToken nlsTokenRequest;
-    nlsTokenRequest.setAccessKeyId(akId);
-    nlsTokenRequest.setKeySecret(akSecret);
-    //打印请求token的参数    
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "begin send generate token rquest: akId=%s, akSecret=%s\n", akId.c_str(), akSecret.c_str());
-    int ret = nlsTokenRequest.applyNlsToken();
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "request success, status code=%d, token=%s, expireTime=%d, message=%s\n", ret, nlsTokenRequest.getToken(), nlsTokenRequest.getExpireTime(), nlsTokenRequest.getErrorMsg());
-    if (ret < 0) 
-    {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "generateToken Failed: %s\n", nlsTokenRequest.getErrorMsg());
-        return -1;
-    }
-    *token = nlsTokenRequest.getToken();
-    if (*token == "") 
-    {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "generateToken Failed: token is '' \n");
-        return -1;
-    }
-    *expireTime = nlsTokenRequest.getExpireTime();
-    return 0;
-}
 /**
  * 识别启动回调函数
  * 
@@ -314,30 +734,19 @@ void onAsrChannelClosed(NlsEvent* cbEvent, void* cbParam)
     }
     delete tmpParam;
 }
-/**
- * @brief asr请求构建
- * 
- * @param cbParam 
- * @return SpeechTranscriberRequest* 
- */
-SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam) 
+//======================================== ali asr end ===============
+
+
+funasr_client *generateAsrClient(AsrParamCallBack * cbParam)
 {
-    time_t now;
-    time(&now);
-    if (g_expireTime - now < 10) 
+    funasr_client* fac = new funasr_client(0);
+    if (fac == NULL)
     {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret\n");
-        if (-1 == generateToken(g_akId, g_akSecret, &g_token, &g_expireTime)) 
-        {
-            return NULL;
-        }
-    }
-    SpeechTranscriberRequest* request = NlsClient::getInstance()->createTranscriberRequest();
-    if (request == NULL) 
-    {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "createTranscriberRequest failed.\n" );
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "generateAsrClient failed.\n" );
         return NULL;
     }
+    
+    /*
     request->setOnTranscriptionStarted(onTranscriptionStarted, cbParam);
     // 设置识别启动回调函数
     request->setOnTranscriptionResultChanged(onAsrTranscriptionResultChanged, cbParam);
@@ -369,10 +778,13 @@ SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam)
     request->setInverseTextNormalization(true);
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
     request->setToken(g_token.c_str());
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, vol multiplier is:%f\n", g_nlsUrl.c_str(), g_vol_multiplier);
-    return request;
+     */
+    
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "asr url is:%s, vol multiplier is:%f\n", g_asrurl.c_str(), g_vol_multiplier);
+    return fac;
 }
-//======================================== ali asr end ===============
+
+
 //======================================== freeswitch module start ===============
 SWITCH_MODULE_LOAD_FUNCTION(mod_asr_load);
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_asr_shutdown);
@@ -388,7 +800,7 @@ extern "C"
  */
 static switch_status_t load_config() 
 {
-    const char *cf = "aliasr.conf";
+    const char *cf = "funasr.conf";
     switch_xml_t cfg, xml, settings, param;
     if (!(xml = switch_xml_open_cfg(cf, &cfg, NULL))) 
     {
@@ -409,24 +821,9 @@ static switch_status_t load_config()
         char *val = (char *) switch_xml_attr_soft(param, "value");
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Read conf: %s = %s\n", var, val);
         //strcasecmp：忽略大小写比较字符串（二进制）
-        if (!strcasecmp(var, "appkey")) 
+        if (!strcasecmp(var, "asrurl"))
         {
-            g_appkey = val;
-            continue;
-        }
-        if (!strcasecmp(var, "akid")) 
-        {
-            g_akId =  val;
-            continue;
-        }
-        if (!strcasecmp(var, "aksecret")) 
-        {
-            g_akSecret=  val;
-            continue;
-        }
-        if (!strcasecmp(var, "nlsurl")) 
-        {
-            g_nlsUrl=  val;
+            g_asrurl=  val;
             continue;
         }
         if (!strcasecmp(var, "debug")) 
@@ -498,21 +895,30 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     switch_caller_profile_t  *profile = switch_channel_get_caller_profile(channel);
                     cbParam->caller = profile->caller_id_number;
                     cbParam->callee = profile->callee_id_number;
-                    SpeechTranscriberRequest* request = generateAsrRequest(cbParam);
+                    funasr_client* fac = generateAsrClient(cbParam);
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",cbParam->caller.c_str() , cbParam->callee.c_str() );
-                    if(request == NULL) 
+                    if(fac == NULL)
                     {
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n", switch_channel_get_name(channel));
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Client init failed.%s\n", switch_channel_get_name(channel));
                         switch_mutex_unlock(pvt->mutex);
                         return SWITCH_TRUE;
                     }
-                    pvt->request = request;
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init SpeechTranscriberRequest.%s\n", switch_channel_get_name(channel));
-                    if (pvt->request->start() < 0) 
+                    pvt->fac = fac;
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init Asr Client.%s\n", switch_channel_get_name(channel));
+                    
+                    std::vector<int> chunk_size;
+                    chunk_size.push_back(5);
+                    chunk_size.push_back(10);
+                    chunk_size.push_back(5);
+
+                    if (pvt->fac->start(std::string(g_asrurl), "2pass", chunk_size) < 0)
                     {
                         pvt->stoped = 1;
                         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start() failed. may be can not connect server. please check network or firewalld:%s\n", switch_channel_get_name(channel));
-                        NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+                        pvt->fac->stop();
+                        delete pvt->fac;
+                        pvt->fac = NULL;
+                        // NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
                         // start()失败，释放request对象
                     }
                 }
@@ -522,13 +928,13 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
         break;
         case SWITCH_ABC_TYPE_CLOSE: 
         {
-            if (pvt->request) 
+            if (pvt->fac)
             {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n", switch_channel_get_name(channel));
-                pvt->request->stop();
+                pvt->fac->stop();
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr stoped:%s\n", switch_channel_get_name(channel));
                 //7: 识别结束, 释放request对象
-                NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+                // NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n", switch_channel_get_name(channel));
             }
         }
@@ -553,11 +959,11 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     if (!pvt->resampler) 
                     {
                         if (switch_resample_create(&pvt->resampler,
-                                                                           read_impl.actual_samples_per_second,
-                                                                           8000,
-                                                                           8 * (read_impl.microseconds_per_packet / 1000) * 2,
-                                                                           SWITCH_RESAMPLE_QUALITY,
-                                                                           1) != SWITCH_STATUS_SUCCESS) 
+                           read_impl.actual_samples_per_second,
+                           8000,
+                           8 * (read_impl.microseconds_per_packet / 1000) * 2,
+                           SWITCH_RESAMPLE_QUALITY,
+                           1) != SWITCH_STATUS_SUCCESS)
                         {
                             switch_mutex_unlock(pvt->mutex);
                             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
@@ -575,12 +981,14 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                 if (g_vol_multiplier != 1.0f) {
                     adjustVolume((int16_t*)dp, (size_t)datalen / 2);
                 }
-                if (pvt->request->sendAudio((uint8_t *)dp, (size_t)datalen) <0) 
+                if (pvt->fac->sendAudio((uint8_t *)dp, (size_t)datalen) <0)
                 {
                     pvt->stoped =1;
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "send audio failed:%s\n", switch_channel_get_name(channel));
-                    pvt->request->stop();
-                    NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+                    pvt->fac->stop();
+                    delete pvt->fac;
+                    pvt->fac = NULL;
+                    // NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
                 }
                 if (g_debug) {
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "SWITCH_ABC_TYPE_READ: send audio %d\n", datalen);
