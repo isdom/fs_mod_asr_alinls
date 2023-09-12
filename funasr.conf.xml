@@ -1,0 +1,7 @@
+<configuration name="funasr.conf" description="mod_asr configuration">
+    <settings>
+        <param name="asrurl" value="ws url"/>
+        <param name="debug" value="false"/>
+        <param name="newdb" value="-48"/>
+   </settings>
+</configuration>
