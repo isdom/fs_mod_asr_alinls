@@ -39,39 +39,55 @@ using websocketpp::lib::bind;
 using websocketpp::lib::placeholders::_1;
 using websocketpp::lib::placeholders::_2;
 
+context_ptr OnTlsInit(websocketpp::connection_hdl) {
+  context_ptr ctx = websocketpp::lib::make_shared<asio::ssl::context>(
+      asio::ssl::context::sslv23);
+
+  try {
+    ctx->set_options(
+        asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
+        asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
+
+  } catch (std::exception& e) {
+    std::cout << e.what() << std::endl;
+  }
+  return ctx;
+}
+
 // template for tls or not config
 template <typename T>
 class WebsocketClient {
- public:
-  // typedef websocketpp::client<T> client;
-  // typedef websocketpp::client<websocketpp::config::asio_tls_client>
-  // wss_client;
-  typedef websocketpp::lib::lock_guard<websocketpp::lib::mutex> scoped_lock;
+public:
+    // typedef websocketpp::client<T> client;
+    // typedef websocketpp::client<websocketpp::config::asio_tls_client>
+    // wss_client;
+    typedef websocketpp::lib::lock_guard<websocketpp::lib::mutex> scoped_lock;
 
-  WebsocketClient(int is_ssl) : m_open(false), m_done(false) {
-    // set up access channels to only log interesting things
-    m_client.clear_access_channels(websocketpp::log::alevel::all);
-    m_client.set_access_channels(websocketpp::log::alevel::connect);
-    m_client.set_access_channels(websocketpp::log::alevel::disconnect);
-    m_client.set_access_channels(websocketpp::log::alevel::app);
+    WebsocketClient(int is_ssl) : m_open(false), m_done(false) {
+        // set up access channels to only log interesting things
+        m_client.clear_access_channels(websocketpp::log::alevel::all);
+        m_client.set_access_channels(websocketpp::log::alevel::connect);
+        m_client.set_access_channels(websocketpp::log::alevel::disconnect);
+        m_client.set_access_channels(websocketpp::log::alevel::app);
 
-    // Initialize the Asio transport policy
-    m_client.init_asio();
+        // Initialize the Asio transport policy
+        m_client.init_asio();
+        m_client.start_perpetual();
 
-    // Bind the handlers we are using
-    using websocketpp::lib::bind;
-    using websocketpp::lib::placeholders::_1;
-    m_client.set_open_handler(bind(&WebsocketClient::on_open, this, _1));
-    m_client.set_close_handler(bind(&WebsocketClient::on_close, this, _1));
+        // Bind the handlers we are using
+        using websocketpp::lib::bind;
+        using websocketpp::lib::placeholders::_1;
+        m_client.set_open_handler(bind(&WebsocketClient::on_open, this, _1));
+        m_client.set_close_handler(bind(&WebsocketClient::on_close, this, _1));
 
-    m_client.set_message_handler(
-        [this](websocketpp::connection_hdl hdl, message_ptr msg) {
-          on_message(hdl, msg);
-        });
+        m_client.set_message_handler(
+            [this](websocketpp::connection_hdl hdl, message_ptr msg) {
+              on_message(hdl, msg);
+            });
 
-    m_client.set_fail_handler(bind(&WebsocketClient::on_fail, this, _1));
-    m_client.clear_access_channels(websocketpp::log::alevel::all);
-  }
+        m_client.set_fail_handler(bind(&WebsocketClient::on_fail, this, _1));
+        m_client.clear_access_channels(websocketpp::log::alevel::all);
+    }
 
     std::string getThreadIdOfString(const std::thread::id & id)
     {
@@ -122,7 +138,7 @@ class WebsocketClient {
 //        _chunk_size = chunk_size;
         
         // Create a thread to run the ASIO io_service event loop
-        _asio_thread = new websocketpp::lib::thread(&websocketpp::client<T>::run, &m_client);
+        m_thread.reset(new websocketpp::lib::thread(&websocketpp::client<T>::run, &m_client));
         
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "start send wsc first msg\n");
         // first message
@@ -160,19 +176,15 @@ class WebsocketClient {
         jsonbegin["wav_name"] = "asr";
         jsonbegin["wav_format"] = "pcm";
         jsonbegin["is_speaking"] = true;
-        m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text,
-                      ec);
+        m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text, ec);
         
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "wsc first msg sended\n");
         return 0;
     }
     
     void stop() {
-        if (_asio_thread) {
-            // _asio_thread->stop();
-            delete _asio_thread;
-            _asio_thread = NULL;
-        }
+        m_client.stop_perpetual();
+        m_thread->join();
     }
 
     // The open handler will signal that we are ready to start sending data
@@ -458,7 +470,7 @@ class WebsocketClient {
 #endif
     
     websocketpp::client<T> m_client;
-    websocketpp::lib::thread *_asio_thread = NULL;
+    websocketpp::lib::shared_ptr<websocketpp::lib::thread> m_thread;
 
 private:
 //    std::string _asr_mode;
@@ -471,7 +483,7 @@ private:
     int total_num = 0;
 };
 
-typedef WebsocketClient<websocketpp::config::asio_client> funasr_client;
+typedef WebsocketClient<websocketpp::config::asio_tls_client> funasr_client;
 
 #define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
 #define SAMPLE_RATE 8000
@@ -745,12 +757,14 @@ void onAsrChannelClosed(NlsEvent* cbEvent, void* cbParam)
 
 funasr_client *generateAsrClient(AsrParamCallBack * cbParam)
 {
-    funasr_client* fac = new funasr_client(0);
+    funasr_client* fac = new funasr_client(1);
     if (fac == NULL)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "generateAsrClient failed.\n" );
         return NULL;
     }
+    
+    fac->m_client.set_tls_init_handler(bind(&OnTlsInit, ::_1));
     
     /*
     request->setOnTranscriptionStarted(onTranscriptionStarted, cbParam);
@@ -875,6 +889,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
 {
     switch_da_t *pvt = (switch_da_t *)user_data;
     switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+    
     switch (type)
     {
         case SWITCH_ABC_TYPE_INIT:
@@ -1012,7 +1027,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
         }
         break;
         default:
-                break;
+        break;
     }
     return SWITCH_TRUE;
 }
