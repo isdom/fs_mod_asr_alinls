@@ -118,25 +118,24 @@ public:
     // This method will block until the connection is complete
     int start(const std::string& uri, std::string asr_mode, std::vector<int> chunk_vector) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "start wsc with: %s mode: %s\n", uri.c_str(), asr_mode.c_str());
-        // Create a new connection to the given URI
-        websocketpp::lib::error_code ec;
-        typename websocketpp::client<T>::connection_ptr con =
-            m_client.get_connection(uri, ec);
-        if (ec) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Get Connection Error: %s\n", ec.message().c_str());
-            return -1;
-        }
-        // Grab a handle for this connection so we can talk to it in a thread
-        // safe manor after the event loop starts.
-        m_hdl = con->get_handle();
-
-        // Queue the connection. No DNS queries or network connections will be
-        // made until the io_service event loop is run.
-        m_client.connect(con);
-
-//        _asr_mode = asr_mode;
-//        _chunk_size = chunk_size;
         
+        {
+            // Create a new connection to the given URI
+            websocketpp::lib::error_code ec;
+            typename websocketpp::client<T>::connection_ptr con = m_client.get_connection(uri, ec);
+            if (ec) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Get Connection Error: %s\n", ec.message().c_str());
+                return -1;
+            }
+            // Grab a handle for this connection so we can talk to it in a thread
+            // safe manor after the event loop starts.
+            m_hdl = con->get_handle();
+
+            // Queue the connection. No DNS queries or network connections will be
+            // made until the io_service event loop is run.
+            m_client.connect(con);
+        }
+
         // Create a thread to run the ASIO io_service event loop
         m_thread.reset(new websocketpp::lib::thread(&websocketpp::client<T>::run, &m_client));
         
@@ -166,23 +165,43 @@ public:
           }
         }
         
-        nlohmann::json jsonbegin;
-        nlohmann::json chunk_size = nlohmann::json::array();
-        chunk_size.push_back(chunk_vector[0]);
-        chunk_size.push_back(chunk_vector[1]);
-        chunk_size.push_back(chunk_vector[2]);
-        jsonbegin["mode"] = asr_mode;
-        jsonbegin["chunk_size"] = chunk_size;
-        jsonbegin["wav_name"] = "asr";
-        jsonbegin["wav_format"] = "pcm";
-        jsonbegin["is_speaking"] = true;
-        m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text, ec);
+        {
+            nlohmann::json jsonbegin;
+            nlohmann::json chunk_size = nlohmann::json::array();
+            chunk_size.push_back(chunk_vector[0]);
+            chunk_size.push_back(chunk_vector[1]);
+            chunk_size.push_back(chunk_vector[2]);
+            jsonbegin["mode"] = asr_mode;
+            jsonbegin["chunk_size"] = chunk_size;
+            jsonbegin["wav_name"] = "asr";
+            jsonbegin["wav_format"] = "pcm";
+            jsonbegin["is_speaking"] = true;
+            
+            websocketpp::lib::error_code ec;
+            m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text, ec);
+            if (ec) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "funasr send begin msg failed: %s\n", ec.message().c_str());
+            } else {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "funasr send begin msg success\n");
+            }
+        }
         
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "wsc first msg sended\n");
         return 0;
     }
     
     void stop() {
+        {
+            nlohmann::json jsonend;
+            jsonend["is_speaking"] = false;
+            websocketpp::lib::error_code ec;
+            m_client.send(m_hdl, jsonend.dump(), websocketpp::frame::opcode::text, ec);
+            if (ec) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "funasr send end msg failed: %s\n", ec.message().c_str());
+            } else {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "funasr send end msg success\n");
+            }
+        }
+
         m_client.stop_perpetual();
         m_thread->join();
     }
@@ -955,6 +974,8 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                 pvt->fac->stop();
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr stoped:%s\n", switch_channel_get_name(channel));
                 //7: 识别结束, 释放request对象
+                delete pvt->fac;
+                pvt->fac = NULL;
                 // NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n", switch_channel_get_name(channel));
             }
