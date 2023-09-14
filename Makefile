@@ -16,7 +16,7 @@ SDK_INCLUDE=-I./NlsSdkCpp3.X/include
 FREESWITCH_LIBS=-L/usr/local/freeswitch/lib -lfreeswitch
 FREESWITCH_INCLUDE=-I/usr/local/freeswitch/include/freeswitch
 
-TARGET_SER=mod_asr.so
+TARGET_SER=mod_funasr.so
 
 SER_OBJS=$(SER_SRCS:.c=.o)
 
