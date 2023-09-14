@@ -35,6 +35,7 @@ typedef struct
     switch_mutex_t          *mutex;
     switch_memory_pool_t    *pool;
     switch_audio_resampler_t *resampler;
+    char                    *asrurl;
 } switch_da_t;
 
 /**
@@ -474,13 +475,7 @@ private:
 #define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
 #define SAMPLE_RATE 16000
 
-std::string g_appkey = "";
-std::string g_akId = "";
-std::string g_akSecret = "";
-std::string g_token = "";
-std::string g_asrurl="";
 bool        g_debug = false;
-long        g_expireTime = -1;
 float       g_vol_multiplier = 1.0f;
 
 funasr_client *generateAsrClient(AsrParamCallBack * cbParam)
@@ -528,19 +523,21 @@ funasr_client *generateAsrClient(AsrParamCallBack * cbParam)
     request->setToken(g_token.c_str());
      */
     
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "asr url is:%s, vol multiplier is:%f\n", g_asrurl.c_str(), g_vol_multiplier);
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "vol multiplier is:%f\n", g_asrurl.c_str(), g_vol_multiplier);
     return fac;
 }
 
 
 //======================================== freeswitch module start ===============
-SWITCH_MODULE_LOAD_FUNCTION(mod_asr_load);
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_asr_shutdown);
+SWITCH_MODULE_LOAD_FUNCTION(mod_funasr_load);
+SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_funasr_shutdown);
 extern "C"
 {
-    SWITCH_MODULE_DEFINITION(mod_asr, mod_asr_load, mod_asr_shutdown, NULL);
+    SWITCH_MODULE_DEFINITION(mod_funasr, mod_funasr_load, mod_funasr_shutdown, NULL);
 }
 ;
+
+#if 0
 /**
  * 配置加载 aliyun的appkey，akid，aksecret
  *
@@ -569,11 +566,6 @@ static switch_status_t load_config()
         char *val = (char *) switch_xml_attr_soft(param, "value");
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Read conf: %s = %s\n", var, val);
         //strcasecmp：忽略大小写比较字符串（二进制）
-        if (!strcasecmp(var, "asrurl"))
-        {
-            g_asrurl=  val;
-            continue;
-        }
         if (!strcasecmp(var, "debug"))
         {
             if (!strcasecmp(val, "true")) {
@@ -590,6 +582,7 @@ static switch_status_t load_config()
     }
     return SWITCH_STATUS_SUCCESS;
 }
+#endif
 
 void adjustVolume(int16_t *pcm, size_t pcmlen) {
     int32_t pcmval;
@@ -660,7 +653,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     chunk_size.push_back(10);
                     chunk_size.push_back(5);
 
-                    if (pvt->fac->start(std::string(g_asrurl), "2pass", chunk_size) < 0)
+                    if (pvt->fac->start(std::string(pvt->asrurl), "2pass", chunk_size) < 0)
                     {
                         pvt->stoped = 1;
                         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start() failed. may be can not connect server. please check network or firewalld:%s\n", switch_channel_get_name(channel));
@@ -761,20 +754,116 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     }
     return SWITCH_TRUE;
 }
-/**
- *  定义添加的函数
- */
-SWITCH_STANDARD_APP(stop_asr_session_function)
-{
-    switch_da_t *pvt;
-    switch_channel_t *channel = switch_core_session_get_channel(session);
-    if ((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))
-    {
-        switch_channel_set_private(channel, "asr", NULL);
-        switch_core_media_bug_remove(session, &pvt->bug);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s Stop ASR\n", switch_channel_get_name(channel));
+
+// uuid_start_funasr <uuid> <uri>
+SWITCH_STANDARD_API(uuid_start_funasr_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "uuid_start_funasr: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
     }
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *mycmd = switch_core_strdup(pool, cmd);
+
+    char *argv[2] = {0, 0};
+    int argc = switch_split(mycmd, ' ', argv);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
+
+    if (argc < 2) {
+        stream->write_function(stream, "parameter number is invalid.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting funasr:%s\n", switch_channel_get_name(channel));
+        
+        switch_status_t status;
+        switch_da_t *pvt;
+        switch_codec_implementation_t read_impl;
+        
+        memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
+        
+        //获取读媒体编码实现方法
+        switch_core_session_get_read_impl(ses, &read_impl);
+        if (!(pvt = (switch_da_t*)switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
+            goto lab_end;
+        }
+        pvt->started = 0;
+        pvt->stoped = 0;
+        pvt->starting = 0;
+        pvt->datalen = 0;
+        pvt->session = ses;
+        pvt->asrurl = strdup(argv[1]);
+        if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
+            goto lab_end;
+        }
+        switch_mutex_init(&pvt->mutex,SWITCH_MUTEX_NESTED,pvt->pool);
+        //session添加media bug
+        if ((status = switch_core_media_bug_add(ses, "asr", NULL,
+                asr_callback, pvt, 0,
+                // SMBF_READ_REPLACE | SMBF_WRITE_REPLACE |  SMBF_NO_PAUSE | SMBF_ONE_ONLY,
+                SMBF_READ_STREAM | SMBF_NO_PAUSE,
+                &(pvt->bug))) != SWITCH_STATUS_SUCCESS) {
+            goto lab_end;
+        }
+        switch_channel_set_private(channel, "asr", pvt);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_INFO, "%s Start ASR\n", switch_channel_get_name(channel));
+lab_end:
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "start funasr failed, can't found session by %s\n", argv[0]);
+    }
+    
+    return SWITCH_STATUS_SUCCESS;
 }
+
+// uuid_stop_funasr <uuid>
+SWITCH_STANDARD_API(uuid_stop_funasr_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "uuid_stop_funasr: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *mycmd = switch_core_strdup(pool, cmd);
+
+    char *argv[1] = {0};
+    int argc = switch_split(mycmd, ' ', argv);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
+
+    if (argc < 1) {
+        stream->write_function(stream, "parameter number is invalid.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+    if (ses) {
+        switch_da_t *pvt;
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if ((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))  {
+            switch_channel_set_private(channel, "asr", NULL);
+            switch_core_media_bug_remove(session, &pvt->bug);
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_DEBUG, "%s Stop ASR\n", switch_channel_get_name(channel));
+        }
+        
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "stop funasr failed, can't found session by %s\n", argv[0]);
+    }
+
+    return SWITCH_STATUS_SUCCESS;
+}
+
+#if 0
 /**
  *  定义添加的函数
  *
@@ -820,34 +909,60 @@ SWITCH_STANDARD_APP(start_asr_session_function)
     switch_channel_set_private(channel, "asr", pvt);
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "%s Start ASR\n", switch_channel_get_name(channel));
 }
+
+/**
+ *  定义添加的函数
+ */
+SWITCH_STANDARD_APP(stop_asr_session_function)
+{
+    switch_da_t *pvt;
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    if ((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr"))) {
+        switch_channel_set_private(channel, "asr", NULL);
+        switch_core_media_bug_remove(session, &pvt->bug);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s Stop ASR\n", switch_channel_get_name(channel));
+    }
+}
+#endif
+
 /**
  *  定义load函数，加载时运行
  */
-SWITCH_MODULE_LOAD_FUNCTION(mod_asr_load)
+SWITCH_MODULE_LOAD_FUNCTION(mod_funasr_load)
 {
-    if (load_config() != SWITCH_STATUS_SUCCESS)
-    {
-        return SWITCH_STATUS_FALSE;
-    }
-//    int ret = NlsClient::getInstance()->setLogConfig("log-transcriber", LogDebug);
-//    if (-1 == ret)
-//    {
-//        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "set log failed\n");
-//        return SWITCH_STATUS_FALSE;
-//    }
-//    NlsClient::getInstance()->startWorkThread(4);
-    switch_application_interface_t *app_interface;
-    *module_interface = switch_loadable_module_create_module_interface(pool, modname);
-    SWITCH_ADD_APP(app_interface, "start_asr", "asr", "asr",start_asr_session_function, "", SAF_MEDIA_TAP);
-    SWITCH_ADD_APP(app_interface, "stop_asr", "asr", "asr", stop_asr_session_function, "", SAF_NONE);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " asr_load\n");
+    switch_api_interface_t* api_interface = NULL;
+    *module_interface =switch_loadable_module_create_module_interface(pool, modname);
+
+    switch_log_printf(SWITCH_CHANNEL_LOG,SWITCH_LOG_INFO, "mod_funasr_load start\n");
+     
+    // register API
+    SWITCH_ADD_API( api_interface,
+                    "uuid_start_funasr",
+                    "uuid_start_funasr api",
+                    uuid_start_funasr_function,
+                    "<cmd><args>");
+    
+    SWITCH_ADD_API( api_interface,
+                    "uuid_stop_funasr",
+                    "uuid_stop_funasr api",
+                    uuid_stop_funasr_function,
+                    "<cmd><args>");
+    
+
+        //注册终端命令自动补全
+//        switch_console_set_complete("add tasktest1 [args]");
+//        switch_console_set_complete("add tasktest2 [args]");
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " funasr_load\n");
+    
     return SWITCH_STATUS_SUCCESS;
 }
+
 /**
  *  定义shutdown函数，关闭时运行
  */
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_asr_shutdown)
+SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_funasr_shutdown)
 {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " asr_shutdown\n");
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " mod_funasr_shutdown called\n");
     return SWITCH_STATUS_SUCCESS;
 }
