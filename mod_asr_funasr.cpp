@@ -12,6 +12,219 @@
 
 #include "nlohmann/json.hpp"
 
+template <typename T> class WebsocketClient;
+
+typedef WebsocketClient<websocketpp::config::asio_tls_client> funasr_client;
+
+struct AsrParamCallBack
+{
+    std::string caller;
+    std::string callee;
+    char *sUUID ;
+};
+
+typedef struct
+{
+    switch_core_session_t   *session;
+    switch_media_bug_t      *bug;
+    funasr_client           *fac;
+    int                     started;
+    int                     stoped;
+    int                     starting;
+    int                     datalen;
+    switch_mutex_t          *mutex;
+    switch_memory_pool_t    *pool;
+    switch_audio_resampler_t *resampler;
+} switch_da_t;
+
+/**
+ * 识别启动回调函数
+ *
+ * @param cbEvent
+ * @param cbParam
+ */
+void onAsrTranscriptionStarted(AsrParamCallBack *cbParam)
+{
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: %s\n", cbParam->sUUID);
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionStarted: status code=%d, task id=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId());
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionStarted: all response=%s\n", cbEvent->getAllResponse());
+    switch_da_t *pvt;
+    switch_core_session_t *ses = switch_core_session_force_locate(cbParam->sUUID);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))
+        {
+            switch_mutex_lock(pvt->mutex);
+            pvt->started = 1;
+            pvt->starting = 0;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"I need lock!!!!!!!!!!!! \n"  );
+            switch_mutex_unlock(pvt->mutex);
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    }
+}
+/**
+ * @brief 一句话开始回调函数
+ *
+ * @param cbEvent
+ * @param cbParam
+ */
+void onAsrSentenceBegin(AsrParamCallBack *cbParam)
+{
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceBegin: %s\n", cbParam->sUUID);
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceBegin: status code=%d, task id=%s, index=%d, time=%d\n", cbEvent->getStatusCode(), cbEvent->getTaskId(),
+//                    cbEvent->getSentenceIndex(),
+//                    cbEvent->getSentenceTime());
+}
+
+/**
+ * @brief 一句话结束回调函数
+ *
+ * @param cbEvent
+ * @param cbParam
+ */
+void onAsrSentenceEnd(AsrParamCallBack *cbParam, const std::string &text)
+{
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceEnd: %s\n", cbParam->sUUID);
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceEnd: status code=%d, task id=%s, index=%d, time=%d, begin_time=%d, result=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId(),
+//                    cbEvent->getSentenceIndex(),
+//                    cbEvent->getSentenceTime(),
+//                    cbEvent->getSentenceBeginTime(),
+//                    cbEvent->getResult()
+//                    );
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrSentenceEnd: all response=%s\n", cbEvent->getAllResponse());
+    switch_event_t *event = NULL;
+    switch_core_session_t *ses = switch_core_session_force_locate(cbParam->sUUID);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if(switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS)
+        {
+            event->subclass_name = (char*)malloc(strlen("start_asr_") + strlen(cbParam->sUUID) + 1);
+            strcpy(event->subclass_name, "start_asr_");
+            strcat(event->subclass_name, cbParam->sUUID);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", cbParam->sUUID);
+    
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", text.c_str());
+    
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
+            switch_event_fire(&event);
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    }
+}
+
+/**
+ * @brief 识别结果变化回调函数
+ *
+ * @param cbEvent
+ * @param cbParam
+ */
+void onAsrTranscriptionResultChanged(AsrParamCallBack *cbParam, const std::string &text)
+{
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionResultChanged: %s\n", cbParam->sUUID);
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionResultChanged: status code=%d, task id=%s, index=%d, time=%d, result=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId(),
+//                    cbEvent->getSentenceIndex(),
+//                    cbEvent->getSentenceTime(),
+//                    cbEvent->getResult()
+//                    );
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrTranscriptionResultChanged: all response=%s\n", cbEvent->getAllResponse());
+    switch_event_t *event = NULL;
+    switch_core_session_t *ses = switch_core_session_force_locate(cbParam->sUUID);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS)
+        {
+            event->subclass_name = strdup("update_asr");
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", cbParam->sUUID);
+    
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", text.c_str());
+            
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
+            switch_event_fire(&event);
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    }
+}
+/**
+ * @brief 语音转写结束回调函数
+ *
+ * @param cbEvent
+ * @param cbParam
+ */
+void onAsrTranscriptionCompleted(AsrParamCallBack *cbParam)
+{
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionCompleted: %s\n", cbParam->sUUID);
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionCompleted: status code=%d, task id=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId());
+    switch_da_t *pvt;
+    switch_core_session_t *ses = switch_core_session_force_locate(cbParam->sUUID);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))
+        {
+            //        if(pvt->frameDataBuffer){
+            //            free(pvt->frameDataBuffer);
+            //        }
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    }
+}
+/**
+ * @brief 异常识别回调函数
+ *
+ * @param cbEvent
+ * @param cbParam
+ */
+void onAsrTaskFailed(AsrParamCallBack *cbParam)
+{
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTaskFailed: %s\n", cbParam->sUUID);
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTaskFailed: status code=%d, task id=%s, error message=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId(), cbEvent->getErrorMessage());
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrTaskFailed: all response=%s\n", cbEvent->getAllResponse());
+    switch_da_t *pvt;
+    switch_core_session_t *ses = switch_core_session_force_locate(cbParam->sUUID);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))
+        {
+            switch_mutex_lock(pvt->mutex);
+            pvt->started = 0;
+            switch_mutex_unlock(pvt->mutex);
+        }
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    }
+}
+
+/**
+ * @brief 识别通道关闭回调函数
+ *
+ * @param cbEvent
+ * @param cbParam
+ */
+void onAsrChannelClosed(AsrParamCallBack *cbParam)
+{
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrChannelClosed: %s\n", cbParam->sUUID);
+    switch_event_t *event = NULL;
+    if(switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS)
+    {
+        event->subclass_name = strdup("stop_asr");
+        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
+//        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Close", cbEvent->getResult());
+        switch_event_fire(&event);
+    }
+    delete cbParam;
+}
+
 /**
  * Define a semi-cross platform helper method that waits/sleeps for a bit.
  */
@@ -53,7 +266,9 @@ public:
     // wss_client;
     typedef websocketpp::lib::lock_guard<websocketpp::lib::mutex> scoped_lock;
 
-    WebsocketClient(int is_ssl) : m_open(false), m_done(false) {
+    WebsocketClient(int is_ssl, AsrParamCallBack *cbParam) : m_open(false), m_done(false) {
+        m_cbParam = cbParam;
+        
         // set up access channels to only log interesting things
         m_client.clear_access_channels(websocketpp::log::alevel::all);
         m_client.set_access_channels(websocketpp::log::alevel::connect);
@@ -90,10 +305,17 @@ public:
         const std::string& payload = msg->get_payload();
         switch (msg->get_opcode()) {
         case websocketpp::frame::opcode::text:
-            nlohmann::json jsonresult = nlohmann::json::parse(payload);
+            nlohmann::json asrresult = nlohmann::json::parse(payload);
             std::string id_str = getThreadIdOfString(std::this_thread::get_id());
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Thread: %s, on_message = %s\n", id_str.c_str(), payload.c_str());
-            if (jsonresult["is_final"] == true) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "thread: %s, on_message = %s\n", id_str.c_str(), payload.c_str());
+
+            if (asrresult["mode"] == "2pass-online") {
+                onAsrTranscriptionResultChanged(m_cbParam, asrresult["text"]);
+            } else if (asrresult["mode"] == "2pass-offline") {
+                onAsrSentenceEnd(m_cbParam, asrresult["text"]);
+            }
+                
+            if (asrresult["is_final"] == true) {
                 websocketpp::lib::error_code ec;
        
                 m_client.close(hdl, websocketpp::close::status::going_away, "", ec);
@@ -194,30 +416,41 @@ public:
 
         m_client.stop_perpetual();
         m_thread->join();
+        
+        onAsrChannelClosed(m_cbParam);
     }
 
     // The open handler will signal that we are ready to start sending data
     void on_open(websocketpp::connection_hdl) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Connection opened, starting data!\n");
 
-        scoped_lock guard(m_lock);
-        m_open = true;
+        {
+            scoped_lock guard(m_lock);
+            m_open = true;
+        }
+        onAsrTranscriptionStarted(m_cbParam);
     }
 
     // The close handler will signal that we should stop sending data
     void on_close(websocketpp::connection_hdl) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Connection closed, stopping data!\n");
-
-        scoped_lock guard(m_lock);
-        m_done = true;
+        
+        {
+            scoped_lock guard(m_lock);
+            m_done = true;
+        }
+        onAsrTranscriptionCompleted(m_cbParam);
     }
 
     // The fail handler will signal that we should stop sending data
     void on_fail(websocketpp::connection_hdl) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Connection failed, stopping data!\n");
-
-        scoped_lock guard(m_lock);
-        m_done = true;
+        
+        {
+            scoped_lock guard(m_lock);
+            m_done = true;
+        }
+        onAsrTaskFailed(m_cbParam);
     }
     
     void sendAudio(uint8_t *dp, size_t datalen, websocketpp::lib::error_code &ec) {
@@ -229,40 +462,17 @@ public:
 
 private:
     
+    AsrParamCallBack            *m_cbParam;
     websocketpp::connection_hdl m_hdl;
     websocketpp::lib::mutex m_lock;
     bool m_open;
     bool m_done;
 };
 
-typedef WebsocketClient<websocketpp::config::asio_tls_client> funasr_client;
+// typedef WebsocketClient<websocketpp::config::asio_tls_client> funasr_client;
 
 #define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
-#define SAMPLE_RATE 8000
-
-
-struct AsrParamCallBack
-{
-    std::string caller;
-    std::string callee;
-    char *sUUID ;
-};
-
-//======================================== ali asr start ===============
-typedef struct
-{
-    switch_core_session_t   *session;
-    switch_media_bug_t      *bug;
-    // SpeechTranscriberRequest *request;
-    funasr_client           *fac;
-    int                     started;
-    int                     stoped;
-    int                     starting;
-    int                     datalen;
-    switch_mutex_t          *mutex;
-    switch_memory_pool_t *pool;
-    switch_audio_resampler_t *resampler;
-} switch_da_t;
+#define SAMPLE_RATE 16000
 
 std::string g_appkey = "";
 std::string g_akId = "";
@@ -273,243 +483,9 @@ bool        g_debug = false;
 long        g_expireTime = -1;
 float       g_vol_multiplier = 1.0f;
 
-#if 0
-/**
- * 识别启动回调函数
- *
- * @param cbEvent
- * @param cbParam
- */
-void onTranscriptionStarted(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: %s\n", tmpParam->sUUID);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionStarted: status code=%d, task id=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId());
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionStarted: all response=%s\n", cbEvent->getAllResponse());
-    switch_da_t *pvt;
-    switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    if (ses) {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))
-        {
-            switch_mutex_lock(pvt->mutex);
-            pvt->started = 1;
-            pvt->starting = 0;
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"I need lock!!!!!!!!!!!! \n"  );
-            switch_mutex_unlock(pvt->mutex);
-        }
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-}
-/**
- * @brief 一句话开始回调函数
- *
- * @param cbEvent
- * @param cbParam
- */
-void onAsrSentenceBegin(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceBegin: %s\n", tmpParam->sUUID);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceBegin: status code=%d, task id=%s, index=%d, time=%d\n", cbEvent->getStatusCode(), cbEvent->getTaskId(),
-                    cbEvent->getSentenceIndex(),
-                    cbEvent->getSentenceTime());
-}
-
-char *dupAsrResult(const char *allResponse)
-{
-    const char *p = strstr(allResponse, "\"result\":\"");
-    if (!p) {
-        return strdup("");
-    }
-    
-    const char *begin = p + 10;
-    const char *end = strchr(begin, '\"');
-
-    if (!end) {
-        return strdup("");
-    }
-
-    return strndup(begin, end - begin);
-}
-
-/**
- * @brief 一句话结束回调函数
- *
- * @param cbEvent
- * @param cbParam
- */
-void onAsrSentenceEnd(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceEnd: %s\n", tmpParam->sUUID);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceEnd: status code=%d, task id=%s, index=%d, time=%d, begin_time=%d, result=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId(),
-                    cbEvent->getSentenceIndex(),
-                    cbEvent->getSentenceTime(),
-                    cbEvent->getSentenceBeginTime(),
-                    cbEvent->getResult()
-                    );
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrSentenceEnd: all response=%s\n", cbEvent->getAllResponse());
-    switch_event_t *event = NULL;
-    switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    if (ses) {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if(switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS)
-        {
-            event->subclass_name = (char*)malloc(strlen("start_asr_") + strlen(tmpParam->sUUID) + 1);
-            strcpy(event->subclass_name, "start_asr_");
-            strcat(event->subclass_name, tmpParam->sUUID);
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", tmpParam->sUUID);
-    
-            char *result = dupAsrResult(cbEvent->getAllResponse());
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
-            free(result);
-    
-            // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
-            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
-            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
-            switch_event_fire(&event);
-        }
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-}
-
-/**
- * @brief 识别结果变化回调函数
- *
- * @param cbEvent
- * @param cbParam
- */
-void onAsrTranscriptionResultChanged(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionResultChanged: %s\n", tmpParam->sUUID);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionResultChanged: status code=%d, task id=%s, index=%d, time=%d, result=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId(),
-                    cbEvent->getSentenceIndex(),
-                    cbEvent->getSentenceTime(),
-                    cbEvent->getResult()
-                    );
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrTranscriptionResultChanged: all response=%s\n", cbEvent->getAllResponse());
-    switch_event_t *event = NULL;
-    switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    if (ses) {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS)
-        {
-            event->subclass_name = strdup("update_asr");
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", tmpParam->sUUID);
-    
-            char *result = dupAsrResult(cbEvent->getAllResponse());
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
-            free(result);
-            // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
-            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
-            //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
-            switch_event_fire(&event);
-        }
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-}
-/**
- * @brief 语音转写结束回调函数
- *
- * @param cbEvent
- * @param cbParam
- */
-void onAsrTranscriptionCompleted(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionCompleted: %s\n", tmpParam->sUUID);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTranscriptionCompleted: status code=%d, task id=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId());
-    switch_da_t *pvt;
-    switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    if (ses) {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))
-        {
-            //        if(pvt->frameDataBuffer){
-            //            free(pvt->frameDataBuffer);
-            //        }
-        }
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-}
-/**
- * @brief 异常识别回调函数
- *
- * @param cbEvent
- * @param cbParam
- */
-void onAsrTaskFailed(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTaskFailed: %s\n", tmpParam->sUUID);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrTaskFailed: status code=%d, task id=%s, error message=%s\n", cbEvent->getStatusCode(), cbEvent->getTaskId(), cbEvent->getErrorMessage());
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrTaskFailed: all response=%s\n", cbEvent->getAllResponse());
-    switch_da_t *pvt;
-    switch_core_session_t *ses = switch_core_session_force_locate(tmpParam->sUUID);
-    if (ses) {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))
-        {
-            switch_mutex_lock(pvt->mutex);
-            pvt->started = 0;
-            switch_mutex_unlock(pvt->mutex);
-        }
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-}
-/**
- * @brief 二次结果返回回调函数, 开启enable_nlp后返回
- *
- * @param cbEvent
- * @param cbParam
- */
-void onAsrSentenceSemantics(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceSemantics: %s\n", tmpParam->sUUID);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,"onAsrSentenceSemantics: all response=%s\n", cbEvent->getAllResponse());
-}
-/**
- * @brief 识别通道关闭回调函数
- *
- * @param cbEvent
- * @param cbParam
- */
-void onAsrChannelClosed(NlsEvent* cbEvent, void* cbParam)
-{
-    AsrParamCallBack* tmpParam = (AsrParamCallBack*)cbParam;
-    switch_event_t *event = NULL;
-    if(switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS)
-    {
-        event->subclass_name = strdup("stop_asr");
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Close", cbEvent->getResult());
-        switch_event_fire(&event);
-    }
-    delete tmpParam;
-}
-//======================================== ali asr end ===============
-#endif
-
 funasr_client *generateAsrClient(AsrParamCallBack * cbParam)
 {
-    funasr_client* fac = new funasr_client(1);
+    funasr_client* fac = new funasr_client(1, cbParam);
     if (fac == NULL)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "generateAsrClient failed.\n" );
