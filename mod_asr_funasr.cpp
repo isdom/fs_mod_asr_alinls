@@ -23,15 +23,6 @@ void WaitABit() {
 #endif
 }
 
-bool IsTargetFile(const std::string& filename, const std::string target) {
-  std::size_t pos = filename.find_last_of(".");
-  if (pos == std::string::npos) {
-    return false;
-  }
-  std::string extension = filename.substr(pos + 1);
-  return (extension == target);
-}
-
 typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
 typedef websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> context_ptr;
 
@@ -40,18 +31,17 @@ using websocketpp::lib::placeholders::_1;
 using websocketpp::lib::placeholders::_2;
 
 context_ptr OnTlsInit(websocketpp::connection_hdl) {
-  context_ptr ctx = websocketpp::lib::make_shared<asio::ssl::context>(
-      asio::ssl::context::sslv23);
+    context_ptr ctx = websocketpp::lib::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
 
-  try {
-    ctx->set_options(
-        asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
-        asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
+    try {
+        ctx->set_options(
+            asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
+            asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
 
-  } catch (std::exception& e) {
-    std::cout << e.what() << std::endl;
-  }
-  return ctx;
+    } catch (std::exception& e) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "OnTlsInit asio::ssl::context::set_options exception: %s\n", e.what().c_str());
+    }
+    return ctx;
 }
 
 // template for tls or not config
@@ -234,272 +224,15 @@ public:
         m_client.send(m_hdl, dp, datalen, websocketpp::frame::opcode::binary, ec);
     }
     
-#if 0
-  // send wav to server
-  void send_wav_data(string wav_path, string wav_id, std::string asr_mode,
-                     std::vector<int> chunk_vector) {
-    uint64_t count = 0;
-    std::stringstream val;
-
-    funasr::Audio audio(1);
-    int32_t sampling_rate = 16000;
-    std::string wav_format = "pcm";
-    if (IsTargetFile(wav_path.c_str(), "wav")) {
-      int32_t sampling_rate = -1;
-      if (!audio.LoadWav(wav_path.c_str(), &sampling_rate)) return;
-    } else if (IsTargetFile(wav_path.c_str(), "pcm")) {
-      if (!audio.LoadPcmwav(wav_path.c_str(), &sampling_rate)) return;
-    } else {
-        printf("Wrong wav extension");
-        exit(-1);
-    }
-
-    float* buff;
-    int len;
-    int flag = 0;
-    bool wait = false;
-    while (1) {
-      {
-        scoped_lock guard(m_lock);
-        // If the connection has been closed, stop generating data
-        if (m_done) {
-          break;
-        }
-        // If the connection hasn't been opened yet wait a bit and retry
-        if (!m_open) {
-          wait = true;
-        } else {
-          break;
-        }
-      }
-
-      if (wait) {
-        // LOG(INFO) << "wait.." << m_open;
-        WaitABit();
-        continue;
-      }
-    }
-    websocketpp::lib::error_code ec;
-
-    nlohmann::json jsonbegin;
-    nlohmann::json chunk_size = nlohmann::json::array();
-    chunk_size.push_back(chunk_vector[0]);
-    chunk_size.push_back(chunk_vector[1]);
-    chunk_size.push_back(chunk_vector[2]);
-    jsonbegin["mode"] = asr_mode;
-    jsonbegin["chunk_size"] = chunk_size;
-    jsonbegin["wav_name"] = wav_id;
-    jsonbegin["wav_format"] = wav_format;
-    jsonbegin["is_speaking"] = true;
-    m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text,
-                  ec);
-
-    // fetch wav data use asr engine api
-    if (wav_format == "pcm") {
-      while (audio.Fetch(buff, len, flag) > 0) {
-        short* iArray = new short[len];
-        for (size_t i = 0; i < len; ++i) {
-          iArray[i] = (short)(buff[i] * 32768);
-        }
-
-        // send data to server
-        int offset = 0;
-        int block_size = 102400;
-        while (offset < len) {
-          int send_block = 0;
-          if (offset + block_size <= len) {
-            send_block = block_size;
-          } else {
-            send_block = len - offset;
-          }
-          m_client.send(m_hdl, iArray + offset, send_block * sizeof(short),
-                websocketpp::frame::opcode::binary, ec);
-          offset += send_block;
-        }
-
-        cout << "sended data len=" << len * sizeof(short) << endl;
-        if (ec) {
-          m_client.get_alog().write(websocketpp::log::alevel::app,
-                                    "Send Error: " + ec.message());
-          break;
-        }
-        delete[] iArray;
-      }
-    } else {
-      int offset = 0;
-      int block_size = 204800;
-      len = audio.GetSpeechLen();
-      char* others_buff = audio.GetSpeechChar();
-
-      while (offset < len) {
-        int send_block = 0;
-        if (offset + block_size <= len) {
-          send_block = block_size;
-        } else {
-          send_block = len - offset;
-        }
-        m_client.send(m_hdl, others_buff + offset, send_block,
-                      websocketpp::frame::opcode::binary, ec);
-        offset += send_block;
-      }
-
-      cout << "sended data len=" << len << endl;
-      if (ec) {
-        m_client.get_alog().write(websocketpp::log::alevel::app,
-                                  "Send Error: " + ec.message());
-      }
-    }
-
-    nlohmann::json jsonresult;
-    jsonresult["is_speaking"] = false;
-    m_client.send(m_hdl, jsonresult.dump(), websocketpp::frame::opcode::text,
-                  ec);
-    WaitABit();
-  }
-
-  static int RecordCallback(const void* inputBuffer, void* outputBuffer,
-      unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo* timeInfo,
-      PaStreamCallbackFlags statusFlags, void* userData)
-  {
-      std::vector<float>* buffer = static_cast<std::vector<float>*>(userData);
-      const float* input = static_cast<const float*>(inputBuffer);
-
-      for (unsigned int i = 0; i < framesPerBuffer; i++)
-      {
-          buffer->push_back(input[i]);
-      }
-
-      return paContinue;
-  }
-
-  void send_rec_data(std::string asr_mode, std::vector<int> chunk_vector) {
-    // first message
-    bool wait = false;
-    while (1) {
-      {
-        scoped_lock guard(m_lock);
-        // If the connection has been closed, stop generating data
-        if (m_done) {
-          break;
-        }
-        // If the connection hasn't been opened yet wait a bit and retry
-        if (!m_open) {
-          wait = true;
-        } else {
-          break;
-        }
-      }
-
-      if (wait) {
-        // LOG(INFO) << "wait.." << m_open;
-        WaitABit();
-        continue;
-      }
-    }
-    websocketpp::lib::error_code ec;
-
-    nlohmann::json jsonbegin;
-    nlohmann::json chunk_size = nlohmann::json::array();
-    chunk_size.push_back(chunk_vector[0]);
-    chunk_size.push_back(chunk_vector[1]);
-    chunk_size.push_back(chunk_vector[2]);
-    jsonbegin["mode"] = asr_mode;
-    jsonbegin["chunk_size"] = chunk_size;
-    jsonbegin["wav_name"] = "record";
-    jsonbegin["wav_format"] = "pcm";
-    jsonbegin["is_speaking"] = true;
-    m_client.send(m_hdl, jsonbegin.dump(), websocketpp::frame::opcode::text,
-                  ec);
-    // mic
-    Microphone mic;
-    PaDeviceIndex num_devices = Pa_GetDeviceCount();
-    cout << "Num devices: " << num_devices << endl;
-
-    PaStreamParameters param;
-
-    param.device = Pa_GetDefaultInputDevice();
-    if (param.device == paNoDevice) {
-      cout << "No default input device found" << endl;
-      exit(EXIT_FAILURE);
-    }
-    cout << "Use default device: " << param.device << endl;
-
-    const PaDeviceInfo *info = Pa_GetDeviceInfo(param.device);
-    cout << "  Name: " << info->name << endl;
-    cout << "  Max input channels: " << info->maxInputChannels << endl;
-
-    param.channelCount = 1;
-    param.sampleFormat = paFloat32;
-
-    param.suggestedLatency = info->defaultLowInputLatency;
-    param.hostApiSpecificStreamInfo = nullptr;
-    float sample_rate = 16000;
-
-    PaStream *stream;
-    std::vector<float> buffer;
-    PaError err =
-        Pa_OpenStream(&stream, &param, nullptr, /* &outputParameters, */
-                      sample_rate,
-                      0,          // frames per buffer
-                      paClipOff,  // we won't output out of range samples
-                                  // so don't bother clipping them
-                      RecordCallback, &buffer);
-    if (err != paNoError) {
-      cout << "portaudio error: " << Pa_GetErrorText(err) << endl;
-      exit(EXIT_FAILURE);
-    }
-
-    err = Pa_StartStream(stream);
-    cout << "Started: " << endl;
-
-    if (err != paNoError) {
-      cout << "portaudio error: " << Pa_GetErrorText(err) << endl;
-      exit(EXIT_FAILURE);
-    }
-
-    while(true){
-      int len = buffer.size();
-      short* iArray = new short[len];
-      for (size_t i = 0; i < len; ++i) {
-        iArray[i] = (short)(buffer[i] * 32768);
-      }
-
-      m_client.send(m_hdl, iArray, len * sizeof(short),
-                    websocketpp::frame::opcode::binary, ec);
-      buffer.clear();
-
-      if (ec) {
-        m_client.get_alog().write(websocketpp::log::alevel::app,
-                                  "Send Error: " + ec.message());
-      }
-      Pa_Sleep(20);  // sleep for 20ms
-    }
-
-    nlohmann::json jsonresult;
-    jsonresult["is_speaking"] = false;
-    m_client.send(m_hdl, jsonresult.dump(), websocketpp::frame::opcode::text,
-                  ec);
-    
-    err = Pa_CloseStream(stream);
-    if (err != paNoError) {
-      cout << "portaudio error: " << Pa_GetErrorText(err) << endl;
-      exit(EXIT_FAILURE);
-    }
-  }
-#endif
-    
     websocketpp::client<T> m_client;
     websocketpp::lib::shared_ptr<websocketpp::lib::thread> m_thread;
 
 private:
-//    std::string _asr_mode;
-//    std::vector<int> _chunk_size;
     
     websocketpp::connection_hdl m_hdl;
     websocketpp::lib::mutex m_lock;
     bool m_open;
     bool m_done;
-    int total_num = 0;
 };
 
 typedef WebsocketClient<websocketpp::config::asio_tls_client> funasr_client;
