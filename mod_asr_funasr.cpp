@@ -849,7 +849,7 @@ SWITCH_STANDARD_API(uuid_stop_funasr_function) {
         switch_channel_t *channel = switch_core_session_get_channel(ses);
         if ((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))  {
             switch_channel_set_private(channel, "asr", NULL);
-            switch_core_media_bug_remove(session, &pvt->bug);
+            switch_core_media_bug_remove(ses, &pvt->bug);
             switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_DEBUG, "%s Stop ASR\n", switch_channel_get_name(channel));
         }
         
