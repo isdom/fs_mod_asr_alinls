@@ -33,26 +33,26 @@ typedef struct
     int                     starting;
     int                     datalen;
     switch_mutex_t          *mutex;
-    switch_memory_pool_t *pool;
+    switch_memory_pool_t    *pool;
     switch_audio_resampler_t *resampler;
+    char                    *appkey;
+    char                    *nlsurl;
+    char                    *speech_noise_threshold;
 } switch_da_t;
 
-std::string g_appkey = "";
 std::string g_akId = "";
 std::string g_akSecret = "";
 std::string g_token = "";
+long        g_expireTime = -1;
 
 // begin for 3.1
 std::string g_domain = "";
 std::string g_api_version = "";
 // end for 3.1
 
-std::string g_nlsUrl="";
 bool        g_debug = false;
-long        g_expireTime = -1;
-float       g_speechNoiseThreshold = 0;
 
-SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam);
+SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam, switch_da_t *pvt);
 
 /**
  * 根据AccessKey ID和AccessKey Secret重新生成一个token，
@@ -331,7 +331,7 @@ void onAsrChannelClosed(NlsEvent* cbEvent, void* cbParam)
  * @param cbParam 
  * @return SpeechTranscriberRequest* 
  */
-SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam) 
+SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam, switch_da_t *pvt)
 {
     time_t now;
     time(&now);
@@ -365,17 +365,17 @@ SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam)
     // 设置识别通道关闭回调函数
     request->setOnSentenceSemantics(onAsrSentenceSemantics, cbParam);
     //设置二次结果返回回调函数, 开启enable_nlp后返回
-    request->setAppKey(g_appkey.c_str());
+    request->setAppKey(pvt->appkey);
     // 设置AppKey, 必填参数, 请参照官网申请
-    request->setUrl(g_nlsUrl.c_str());
+    request->setUrl(pvt->nlsurl);
     // 设置ASR 服务地址, 可使用公网 或 ECS 内网地址，具体参见: https://help.aliyun.com/document_detail/84428.html?spm=a2c4g.148847.0.0.1b704938UF5b6y
     
     // 噪音参数阈值，参数范围：[-1,1]。取值说明如下：
     //  取值越趋于-1，噪音被判定为语音的概率越大。
     //  取值越趋于+1，语音被判定为噪音的概率越大。
     //  参见 https://help.aliyun.com/document_detail/84428.html
-    if (g_speechNoiseThreshold != 0) {
-        request->setSpeechNoiseThreshold(g_speechNoiseThreshold);
+    if (pvt->speech_noise_threshold) {
+        request->setSpeechNoiseThreshold(atof(pvt->speech_noise_threshold));
     }
     
     request->setFormat("pcm");
@@ -389,16 +389,16 @@ SpeechTranscriberRequest* generateAsrRequest(AsrParamCallBack * cbParam)
     request->setInverseTextNormalization(true);
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
     request->setToken(g_token.c_str());
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, speech_noise_threshold is:%f\n", g_nlsUrl.c_str(), g_speechNoiseThreshold);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, speech_noise_threshold is:%s\n", pvt->nlsurl, pvt->speech_noise_threshold);
     return request;
 }
 //======================================== ali asr end ===============
 //======================================== freeswitch module start ===============
-SWITCH_MODULE_LOAD_FUNCTION(mod_asr_load);
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_asr_shutdown);
+SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load);
+SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown);
 extern "C" 
 {
-    SWITCH_MODULE_DEFINITION(mod_asr, mod_asr_load, mod_asr_shutdown, NULL);
+    SWITCH_MODULE_DEFINITION(mod_aliasr, mod_aliasr_load, mod_aliasr_shutdown, NULL);
 }
 ;
 /**
@@ -429,12 +429,7 @@ static switch_status_t load_config()
         char *val = (char *) switch_xml_attr_soft(param, "value");
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Read conf: %s = %s\n", var, val);
         //strcasecmp：忽略大小写比较字符串（二进制）
-        if (!strcasecmp(var, "appkey")) 
-        {
-            g_appkey = val;
-            continue;
-        }
-        if (!strcasecmp(var, "akid")) 
+        if (!strcasecmp(var, "akid"))
         {
             g_akId =  val;
             continue;
@@ -444,21 +439,11 @@ static switch_status_t load_config()
             g_akSecret=  val;
             continue;
         }
-        if (!strcasecmp(var, "nlsurl")) 
-        {
-            g_nlsUrl=  val;
-            continue;
-        }
-        if (!strcasecmp(var, "debug")) 
+        if (!strcasecmp(var, "debug"))
         {
             if (!strcasecmp(val, "true")) {
                 g_debug = true;
             }
-            continue;
-        }
-        if (!strcasecmp(var, "speech_noise_threshold"))
-        {
-            g_speechNoiseThreshold = atof(val);
             continue;
         }
     }
@@ -502,7 +487,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     switch_caller_profile_t  *profile = switch_channel_get_caller_profile(channel);
                     cbParam->caller = profile->caller_id_number;
                     cbParam->callee = profile->callee_id_number;
-                    SpeechTranscriberRequest* request = generateAsrRequest(cbParam);
+                    SpeechTranscriberRequest* request = generateAsrRequest(cbParam, pvt);
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",cbParam->caller.c_str() , cbParam->callee.c_str() );
                     if(request == NULL) 
                     {
@@ -554,15 +539,13 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                 int16_t *dp = (int16_t *)frame.data;
                 if (read_impl.actual_samples_per_second != 8000) 
                 {
-                    if (!pvt->resampler) 
-                    {
+                    if (!pvt->resampler) {
                         if (switch_resample_create(&pvt->resampler,
-                                                                           read_impl.actual_samples_per_second,
-                                                                           8000,
-                                                                           8 * (read_impl.microseconds_per_packet / 1000) * 2,
-                                                                           SWITCH_RESAMPLE_QUALITY,
-                                                                           1) != SWITCH_STATUS_SUCCESS) 
-                        {
+                               read_impl.actual_samples_per_second,
+                               8000,
+                               8 * (read_impl.microseconds_per_packet / 1000) * 2,
+                               SWITCH_RESAMPLE_QUALITY,
+                               1) != SWITCH_STATUS_SUCCESS) {
                             switch_mutex_unlock(pvt->mutex);
                             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
                             return SWITCH_FALSE;
@@ -598,6 +581,158 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     }
     return SWITCH_TRUE;
 }
+
+// uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> noise=<speechNoiseThreshold> debug=<true/false>
+#define MAX_API_ARGC 5
+
+SWITCH_STANDARD_API(uuid_start_aliasr_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "uuid_start_aliasr: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *mycmd = switch_core_strdup(pool, cmd);
+
+    char *argv[MAX_API_ARGC];
+    memset(argv, 0, sizeof(char*)*MAX_API_ARGC);
+
+    int argc = switch_split(mycmd, ' ', argv);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
+
+    if (argc < 1) {
+        stream->write_function(stream, "uuid is required.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+    
+    char*   _appkey = NULL;
+    char*   _nlsurl = NULL;
+    char*   _speech_noise_threshold = NULL;
+//    bool        _debug = false;
+    
+    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
+        if (argv[idx] != NULL) {
+            char *ss[2] = {0, 0};
+            int cnt = switch_split(argv[idx], '=', ss);
+            if (cnt == 2) {
+                char *var = ss[0];
+                char *val = ss[1];
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "process arg: %s = %s\n", var, val);
+                //strcasecmp：忽略大小写比较字符串（二进制）
+                if (!strcasecmp(var, "appkey")) {
+                    _appkey = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "nls")) {
+                    _nlsurl=  val;
+                    continue;
+                }
+//                if (!strcasecmp(var, "debug")) {
+//                    if (!strcasecmp(val, "true")) {
+//                        _debug = true;
+//                    }
+//                    continue;
+//                }
+                if (!strcasecmp(var, "noise")) {
+                    _speech_noise_threshold = val; //atof(val);
+                    continue;
+                }
+            }
+        }
+    }
+    
+    if (_appkey == NULL || _nlsurl == NULL) {
+        stream->write_function(stream, "appkey and nls is required.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+    if (ses) {
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting aliasr:%s\n", switch_channel_get_name(channel));
+        
+        switch_status_t status;
+        switch_da_t *pvt;
+        if (!(pvt = (switch_da_t*)switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
+            goto lab_end;
+        }
+        pvt->started = 0;
+        pvt->stoped = 0;
+        pvt->starting = 0;
+        pvt->datalen = 0;
+        pvt->session = ses;
+        pvt->appkey = strdup(_appkey);
+        pvt->nlsurl = strdup(_nlsurl);
+        pvt->speech_noise_threshold = _speech_noise_threshold ? strdup(_speech_noise_threshold) : NULL;
+        if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
+            goto lab_end;
+        }
+        switch_mutex_init(&pvt->mutex,SWITCH_MUTEX_NESTED,pvt->pool);
+        //session添加media bug
+        if ((status = switch_core_media_bug_add(ses, "asr", NULL,
+                asr_callback, pvt, 0,
+                // SMBF_READ_REPLACE | SMBF_WRITE_REPLACE |  SMBF_NO_PAUSE | SMBF_ONE_ONLY,
+                SMBF_READ_STREAM | SMBF_NO_PAUSE,
+                &(pvt->bug))) != SWITCH_STATUS_SUCCESS) {
+            goto lab_end;
+        }
+        switch_channel_set_private(channel, "asr", pvt);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_INFO, "%s Start ASR\n", switch_channel_get_name(channel));
+lab_end:
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "start funasr failed, can't found session by %s\n", argv[0]);
+    }
+    
+    return SWITCH_STATUS_SUCCESS;
+}
+
+// uuid_stop_aliasr <uuid>
+SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "uuid_stop_aliasr: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *mycmd = switch_core_strdup(pool, cmd);
+
+    char *argv[1] = {0};
+    int argc = switch_split(mycmd, ' ', argv);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
+
+    if (argc < 1) {
+        stream->write_function(stream, "parameter number is invalid.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+    if (ses) {
+        switch_da_t *pvt;
+        switch_channel_t *channel = switch_core_session_get_channel(ses);
+        if ((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr")))  {
+            switch_channel_set_private(channel, "asr", NULL);
+            switch_core_media_bug_remove(ses, &pvt->bug);
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_DEBUG, "%s Stop ASR\n", switch_channel_get_name(channel));
+        }
+        
+        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+        //  We meet : ... Locked, Waiting on external entities
+        switch_core_session_rwunlock(ses);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "stop funasr failed, can't found session by %s\n", argv[0]);
+    }
+
+    return SWITCH_STATUS_SUCCESS;
+}
+
+
+#if 0
 /**
  *  定义添加的函数
  */
@@ -657,10 +792,12 @@ SWITCH_STANDARD_APP(start_asr_session_function)
     switch_channel_set_private(channel, "asr", pvt);
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "%s Start ASR\n", switch_channel_get_name(channel));
 }
+#endif
+
 /**
  *  定义load函数，加载时运行
  */
-SWITCH_MODULE_LOAD_FUNCTION(mod_asr_load) 
+SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load)
 {
     if (load_config() != SWITCH_STATUS_SUCCESS) 
     {
@@ -673,18 +810,39 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_asr_load)
         return SWITCH_STATUS_FALSE;
     }
     NlsClient::getInstance()->startWorkThread(4);
-    switch_application_interface_t *app_interface;
-    *module_interface = switch_loadable_module_create_module_interface(pool, modname);
-    SWITCH_ADD_APP(app_interface, "start_asr", "asr", "asr",start_asr_session_function, "", SAF_MEDIA_TAP);
-    SWITCH_ADD_APP(app_interface, "stop_asr", "asr", "asr", stop_asr_session_function, "", SAF_NONE);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " asr_load\n");
+    
+    switch_api_interface_t* api_interface = NULL;
+    *module_interface =switch_loadable_module_create_module_interface(pool, modname);
+
+    switch_log_printf(SWITCH_CHANNEL_LOG,SWITCH_LOG_INFO, "mod_aliasr_load start\n");
+     
+    // register API
+    SWITCH_ADD_API( api_interface,
+                    "uuid_start_aliasr",
+                    "uuid_start_aliasr api",
+                    uuid_start_aliasr_function,
+                    "<cmd><args>");
+    
+    SWITCH_ADD_API( api_interface,
+                    "uuid_stop_aliasr",
+                    "uuid_stop_aliasr api",
+                    uuid_stop_aliasr_function,
+                    "<cmd><args>");
+    
+    //注册终端命令自动补全
+//        switch_console_set_complete("add tasktest1 [args]");
+//        switch_console_set_complete("add tasktest2 [args]");
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " aliasr_load\n");
+    
     return SWITCH_STATUS_SUCCESS;
 }
 /**
  *  定义shutdown函数，关闭时运行
  */
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_asr_shutdown) 
+SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown)
 {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " asr_shutdown\n");
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " mod_aliasr_shutdown called\n");
+
     return SWITCH_STATUS_SUCCESS;
 }
