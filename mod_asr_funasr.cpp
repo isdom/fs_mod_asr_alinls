@@ -35,7 +35,7 @@ typedef struct
     switch_mutex_t          *mutex;
     switch_memory_pool_t    *pool;
     switch_audio_resampler_t *resampler;
-    char                    *asrurl;
+    char                    *funurl;
 } switch_da_t;
 
 /**
@@ -653,7 +653,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                     chunk_size.push_back(10);
                     chunk_size.push_back(5);
 
-                    if (pvt->fac->start(std::string(pvt->asrurl), "2pass", chunk_size) < 0)
+                    if (pvt->fac->start(std::string(pvt->funurl), "2pass", chunk_size) < 0)
                     {
                         pvt->stoped = 1;
                         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start() failed. may be can not connect server. please check network or firewalld:%s\n", switch_channel_get_name(channel));
@@ -755,7 +755,9 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     return SWITCH_TRUE;
 }
 
-// uuid_start_funasr <uuid> <uri>
+// uuid_start_funasr <uuid> funurl=<uri>
+#define MAX_API_ARGC 3
+
 SWITCH_STANDARD_API(uuid_start_funasr_function) {
     if (zstr(cmd)) {
         stream->write_function(stream, "uuid_start_funasr: parameter missing.\n");
@@ -766,7 +768,9 @@ SWITCH_STANDARD_API(uuid_start_funasr_function) {
     switch_core_new_memory_pool(&pool);
     char *mycmd = switch_core_strdup(pool, cmd);
 
-    char *argv[2] = {0, 0};
+    char *argv[MAX_API_ARGC];
+    memset(argv, 0, sizeof(char*)*MAX_API_ARGC);
+    
     int argc = switch_split(mycmd, ' ', argv);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
 
@@ -775,6 +779,30 @@ SWITCH_STANDARD_API(uuid_start_funasr_function) {
         return SWITCH_STATUS_SUCCESS;
     }
 
+    char*   _funurl = NULL;
+    
+    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
+        if (argv[idx] != NULL) {
+            char *ss[2] = {0, 0};
+            int cnt = switch_split(argv[idx], '=', ss);
+            if (cnt == 2) {
+                char *var = ss[0];
+                char *val = ss[1];
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "process arg: %s = %s\n", var, val);
+                //strcasecmp：忽略大小写比较字符串（二进制）
+                if (!strcasecmp(var, "funurl")) {
+                    _funurl = val;
+                    continue;
+                }
+            }
+        }
+    }
+    
+    if (_funurl == NULL) {
+        stream->write_function(stream, "funurl is required.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+    
     switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
     if (ses) {
         switch_channel_t *channel = switch_core_session_get_channel(ses);
@@ -796,7 +824,7 @@ SWITCH_STANDARD_API(uuid_start_funasr_function) {
         pvt->starting = 0;
         pvt->datalen = 0;
         pvt->session = ses;
-        pvt->asrurl = strdup(argv[1]);
+        pvt->funurl = strdup(_funurl);
         if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
             goto lab_end;
