@@ -591,6 +591,13 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         return SWITCH_STATUS_SUCCESS;
     }
 
+    switch_status_t status = SWITCH_STATUS_SUCCESS;
+    switch_core_session_t *ses = NULL;
+    char *_appkey = NULL;
+    char *_nlsurl = NULL;
+    char *_speech_noise_threshold = NULL;
+//    bool        _debug = false;
+
     switch_memory_pool_t *pool;
     switch_core_new_memory_pool(&pool);
     char *mycmd = switch_core_strdup(pool, cmd);
@@ -603,13 +610,8 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
 
     if (argc < 1) {
         stream->write_function(stream, "uuid is required.\n");
-        return SWITCH_STATUS_SUCCESS;
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
-
-    char *_appkey = NULL;
-    char *_nlsurl = NULL;
-    char *_speech_noise_threshold = NULL;
-//    bool        _debug = false;
 
     for (int idx = 1; idx < MAX_API_ARGC; idx++) {
         if (argv[idx] != NULL) {
@@ -644,19 +646,18 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
 
     if (_appkey == NULL || _nlsurl == NULL) {
         stream->write_function(stream, "appkey and nls is required.\n");
-        return SWITCH_STATUS_SUCCESS;
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
-    switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+    ses = switch_core_session_force_locate(argv[0]);
     if (ses) {
         switch_channel_t *channel = switch_core_session_get_channel(ses);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting aliasr:%s\n",
                           switch_channel_get_name(channel));
 
-        switch_status_t status;
         switch_da_t *pvt;
         if (!(pvt = (switch_da_t *) switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
-            goto lab_end;
+            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
         }
         pvt->started = 0;
         pvt->stoped = 0;
@@ -668,7 +669,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         pvt->speech_noise_threshold = _speech_noise_threshold ? strdup(_speech_noise_threshold) : NULL;
         if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
-            goto lab_end;
+            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
         }
         switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
         //session添加media bug
@@ -677,12 +678,12 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
                 // SMBF_READ_REPLACE | SMBF_WRITE_REPLACE |  SMBF_NO_PAUSE | SMBF_ONE_ONLY,
                                                 SMBF_READ_STREAM | SMBF_NO_PAUSE,
                                                 &(pvt->bug))) != SWITCH_STATUS_SUCCESS) {
-            goto lab_end;
+            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
         }
         switch_channel_set_private(channel, "asr", pvt);
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_INFO, "%s Start ASR\n",
                           switch_channel_get_name(channel));
-        lab_end:
+unlock:
         // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
         //  We meet : ... Locked, Waiting on external entities
         switch_core_session_rwunlock(ses);
@@ -691,7 +692,9 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
                           argv[0]);
     }
 
-    return SWITCH_STATUS_SUCCESS;
+end:
+    switch_core_destroy_memory_pool(&pool);
+    return status;
 }
 
 // uuid_stop_aliasr <uuid>
@@ -701,6 +704,8 @@ SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
         return SWITCH_STATUS_SUCCESS;
     }
 
+    switch_status_t status = SWITCH_STATUS_SUCCESS;
+    switch_core_session_t *ses = NULL;
     switch_memory_pool_t *pool;
     switch_core_new_memory_pool(&pool);
     char *mycmd = switch_core_strdup(pool, cmd);
@@ -711,10 +716,10 @@ SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
 
     if (argc < 1) {
         stream->write_function(stream, "parameter number is invalid.\n");
-        return SWITCH_STATUS_SUCCESS;
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
-    switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+    ses = switch_core_session_force_locate(argv[0]);
     if (ses) {
         switch_da_t *pvt;
         switch_channel_t *channel = switch_core_session_get_channel(ses);
@@ -733,7 +738,9 @@ SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
                           argv[0]);
     }
 
-    return SWITCH_STATUS_SUCCESS;
+end:
+    switch_core_destroy_memory_pool(&pool);
+    return status;
 }
 
 
