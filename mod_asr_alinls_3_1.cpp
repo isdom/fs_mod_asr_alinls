@@ -582,6 +582,64 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     return SWITCH_TRUE;
 }
 
+switch_status_t on_channel_destroy(switch_core_session_t *session) {
+    switch_da_t *pvt;
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "%s on_destroy, release all resource for session\n",
+                      switch_channel_get_name(channel));
+
+    if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
+        if (pvt->resampler) {
+            switch_resample_destroy(&pvt->resampler);
+        }
+        switch_mutex_destroy(pvt->mutex);
+        switch_core_destroy_memory_pool(&pvt->pool);
+        switch_channel_set_private(channel, "asr", NULL);
+    }
+    return SWITCH_STATUS_SUCCESS;
+}
+
+switch_state_handler_table_t asr_cs_handlers = {
+        /*! executed when the state changes to init */
+        // switch_state_handler_t on_init;
+        NULL,
+        /*! executed when the state changes to routing */
+        // switch_state_handler_t on_routing;
+        NULL,
+        /*! executed when the state changes to execute */
+        // switch_state_handler_t on_execute;
+        NULL,
+        /*! executed when the state changes to hangup */
+        // switch_state_handler_t on_hangup;
+        NULL,
+        /*! executed when the state changes to exchange_media */
+        // switch_state_handler_t on_exchange_media;
+        NULL,
+        /*! executed when the state changes to soft_execute */
+        // switch_state_handler_t on_soft_execute;
+        NULL,
+        /*! executed when the state changes to consume_media */
+        // switch_state_handler_t on_consume_media;
+        NULL,
+        /*! executed when the state changes to hibernate */
+        // switch_state_handler_t on_hibernate;
+        NULL,
+        /*! executed when the state changes to reset */
+        // switch_state_handler_t on_reset;
+        NULL,
+        /*! executed when the state changes to park */
+        // switch_state_handler_t on_park;
+        NULL,
+        /*! executed when the state changes to reporting */
+        // switch_state_handler_t on_reporting;
+        NULL,
+        /*! executed when the state changes to destroy */
+        // switch_state_handler_t on_destroy;
+        on_channel_destroy,
+        // int flags;
+        0
+};
+
 // uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> noise=<speechNoiseThreshold> debug=<true/false>
 #define MAX_API_ARGC 5
 
@@ -645,7 +703,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     }
 
     if (_appkey == NULL || _nlsurl == NULL) {
-        stream->write_function(stream, "appkey and nls is required.\n");
+        stream->write_function(stream, "appkey and nls are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
@@ -664,9 +722,11 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         pvt->starting = 0;
         pvt->datalen = 0;
         pvt->session = ses;
-        pvt->appkey = strdup(_appkey);
-        pvt->nlsurl = strdup(_nlsurl);
-        pvt->speech_noise_threshold = _speech_noise_threshold ? strdup(_speech_noise_threshold) : NULL;
+        pvt->appkey = switch_core_session_strdup(ses, _appkey);
+        pvt->nlsurl = switch_core_session_strdup(ses, _nlsurl);
+        pvt->speech_noise_threshold = _speech_noise_threshold
+                ? switch_core_session_strdup(ses, _speech_noise_threshold)
+                : NULL;
         if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
@@ -681,6 +741,11 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
         }
         switch_channel_set_private(channel, "asr", pvt);
+
+        if (switch_channel_add_state_handler(channel, &asr_cs_handlers ) < 0) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook cs state change failed!\n");
+        } // hook cs state change
+
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_INFO, "%s Start ASR\n",
                           switch_channel_get_name(channel));
 unlock:
@@ -726,6 +791,13 @@ SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
         if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
             switch_channel_set_private(channel, "asr", NULL);
             switch_core_media_bug_remove(ses, &pvt->bug);
+
+            if (pvt->resampler) {
+                switch_resample_destroy(&pvt->resampler);
+            }
+            switch_mutex_destroy(pvt->mutex);
+            switch_core_destroy_memory_pool(&pvt->pool);
+
             switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_DEBUG, "%s Stop ASR\n",
                               switch_channel_get_name(channel));
         }
@@ -742,69 +814,6 @@ end:
     switch_core_destroy_memory_pool(&pool);
     return status;
 }
-
-
-#if 0
-/**
- *  定义添加的函数
- */
-SWITCH_STANDARD_APP(stop_asr_session_function) 
-{
-    switch_da_t *pvt;
-    switch_channel_t *channel = switch_core_session_get_channel(session);
-    if ((pvt = (switch_da_t*)switch_channel_get_private(channel, "asr"))) 
-    {
-        switch_channel_set_private(channel, "asr", NULL);
-        switch_core_media_bug_remove(session, &pvt->bug);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s Stop ASR\n", switch_channel_get_name(channel));
-    }
-}
-/**
- *  定义添加的函数
- * 
- *  注意：App函数是自带session的，Api中是没有的
- *       App函数中没有stream用于控制台输出的流；Api中是有的
- *       App函数不需要返回值；Api中是有的
- */
-SWITCH_STANDARD_APP(start_asr_session_function) 
-{
-    switch_channel_t *channel = switch_core_session_get_channel(session);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Starting asr:%s\n", switch_channel_get_name(channel));
-    switch_status_t status;
-    switch_da_t *pvt;
-    switch_codec_implementation_t read_impl;
-    //memset是计算机中C/C++语言初始化函数。作用是将某一块内存中的内容全部设置为指定的值， 这个函数通常为新申请的内存做初始化工作。
-    memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
-    //获取读媒体编码实现方法
-    switch_core_session_get_read_impl(session, &read_impl);
-    if (!(pvt = (switch_da_t*)switch_core_session_alloc(session, sizeof(switch_da_t)))) 
-    {
-        return;
-    }
-    pvt->started = 0;
-    pvt->stoped = 0;
-    pvt->starting = 0;
-    pvt->datalen = 0;
-    pvt->session = session;
-    if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) 
-    {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
-        return;
-    }
-    switch_mutex_init(&pvt->mutex,SWITCH_MUTEX_NESTED,pvt->pool);
-    //session添加media bug
-    if ((status = switch_core_media_bug_add(session, "asr", NULL,
-            asr_callback, pvt, 0, 
-            // SMBF_READ_REPLACE | SMBF_WRITE_REPLACE |  SMBF_NO_PAUSE | SMBF_ONE_ONLY, 
-    SMBF_READ_STREAM | SMBF_NO_PAUSE,
-            &(pvt->bug))) != SWITCH_STATUS_SUCCESS) 
-    {
-        return;
-    }
-    switch_channel_set_private(channel, "asr", pvt);
-    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "%s Start ASR\n", switch_channel_get_name(channel));
-}
-#endif
 
 /**
  *  定义load函数，加载时运行
