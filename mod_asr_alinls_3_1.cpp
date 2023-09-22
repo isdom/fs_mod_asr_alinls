@@ -589,12 +589,16 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
                       switch_channel_get_name(channel));
 
     if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
+        switch_channel_set_private(channel, "asr", NULL);
         if (pvt->resampler) {
             switch_resample_destroy(&pvt->resampler);
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "%s on_destroy: switch_resample_destroy\n",
+                              switch_channel_get_name(channel));
         }
         switch_mutex_destroy(pvt->mutex);
         switch_core_destroy_memory_pool(&pvt->pool);
-        switch_channel_set_private(channel, "asr", NULL);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "%s on_destroy: switch_mutex_destroy & switch_core_destroy_memory_pool\n",
+                          switch_channel_get_name(channel));
     }
     return SWITCH_STATUS_SUCCESS;
 }
