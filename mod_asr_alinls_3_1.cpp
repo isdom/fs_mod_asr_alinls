@@ -36,6 +36,9 @@ typedef struct {
     char *appkey;
     char *nlsurl;
     char *speech_noise_threshold;
+    char *asr_dec_vol;
+    float vol_multiplier;
+
 } switch_da_t;
 
 std::string g_akId = "";
@@ -451,6 +454,20 @@ static switch_status_t load_config() {
     return SWITCH_STATUS_SUCCESS;
 }
 
+void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
+    int32_t pcmval;
+    for (size_t ctr = 0; ctr < pcmlen; ctr++) {
+        pcmval = pcm[ctr] * vol_multiplier;
+        if (pcmval < 32767 && pcmval > -32768) {
+            pcm[ctr] = pcmval;
+        } else if (pcmval > 32767) {
+            pcm[ctr] = 32767;
+        } else if (pcmval < -32768) {
+            pcm[ctr] = -32768;
+        }
+    }
+}
+
 /**
  * asr 回调处理
  * 
@@ -559,6 +576,9 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", samples);
                     }
                 }
+                if (pvt->asr_dec_vol) {
+                    adjustVolume((int16_t*)dp, (size_t)datalen / 2, pvt->vol_multiplier);
+                }
                 if (pvt->request->sendAudio((uint8_t *) dp, (size_t) datalen) < 0) {
                     pvt->stoped = 1;
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "send audio failed:%s\n",
@@ -658,6 +678,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     char *_appkey = NULL;
     char *_nlsurl = NULL;
     char *_speech_noise_threshold = NULL;
+    char *_asr_dec_vol = NULL;
 //    bool        _debug = false;
 
     switch_memory_pool_t *pool;
@@ -702,6 +723,11 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
                     _speech_noise_threshold = val; //atof(val);
                     continue;
                 }
+                if (!strcasecmp(var, "asr_dec_vol"))
+                {
+                    _asr_dec_vol = val;
+                    continue;
+                }
             }
         }
     }
@@ -731,6 +757,11 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         pvt->speech_noise_threshold = _speech_noise_threshold
                 ? switch_core_session_strdup(ses, _speech_noise_threshold)
                 : NULL;
+        pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(ses, _asr_dec_vol) : NULL;
+        if (pvt->asr_dec_vol) {
+            double db = atof(pvt->asr_dec_vol);
+            pvt->vol_multiplier = pow(10,db/20);
+        }
         if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
