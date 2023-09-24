@@ -37,8 +37,7 @@ typedef struct {
     char *nlsurl;
     char *speech_noise_threshold;
     char *asr_dec_vol;
-    float vol_multiplier;
-
+    float vol_multiplier = 0.0f;
 } switch_da_t;
 
 std::string g_akId = "";
@@ -397,8 +396,8 @@ SpeechTranscriberRequest *generateAsrRequest(AsrParamCallBack *cbParam, switch_d
     request->setInverseTextNormalization(true);
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
     request->setToken(g_token.c_str());
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, speech_noise_threshold is:%s\n",
-                      pvt->nlsurl, pvt->speech_noise_threshold);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, speech_noise_threshold is:%s, vol multiplier is:%f\n",
+                      pvt->nlsurl, pvt->speech_noise_threshold, pvt->vol_multiplier);
     return request;
 }
 //======================================== ali asr end ===============
@@ -723,8 +722,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
                     _speech_noise_threshold = val; //atof(val);
                     continue;
                 }
-                if (!strcasecmp(var, "asr_dec_vol"))
-                {
+                if (!strcasecmp(var, "asr_dec_vol")) {
                     _asr_dec_vol = val;
                     continue;
                 }
@@ -747,6 +745,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         if (!(pvt = (switch_da_t *) switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
         }
+        memset(pvt, 0, sizeof(switch_da_t));
         pvt->started = 0;
         pvt->stoped = 0;
         pvt->starting = 0;
