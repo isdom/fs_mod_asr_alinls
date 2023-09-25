@@ -33,10 +33,10 @@ typedef struct {
     int datalen;
     switch_mutex_t *mutex;
     switch_memory_pool_t *pool;
-    switch_audio_resampler_t *resampler;
-    char *appkey;
-    char *nlsurl;
-    char *asr_dec_vol;
+    switch_audio_resampler_t *resampler = NULL;
+    char *appkey = NULL;
+    char *nlsurl = NULL;
+    char *asr_dec_vol = NULL;
     float vol_multiplier = 0.0f;
 } switch_da_t;
 
