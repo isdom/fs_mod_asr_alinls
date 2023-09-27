@@ -8,7 +8,7 @@ CLI_STRIP=$(CLI_CC_PRE)strip
 
 
 CFLAGS += -shared -fPIC -O2 -Wall
-SER_SRCS=mod_asr_alinls.cpp
+SER_SRCS=mod_aliasr30.cpp
 
 SDK_LIBS=-L./NlsSdkCpp3.X/lib -lpthread  -lalibabacloud-idst-common -lalibabacloud-idst-speech  -ldl -D_GLIBCXX_USE_CXX11_ABI=0
 SDK_INCLUDE=-I./NlsSdkCpp3.X/include
@@ -16,7 +16,7 @@ SDK_INCLUDE=-I./NlsSdkCpp3.X/include
 FREESWITCH_LIBS=-L/usr/local/freeswitch/lib -lfreeswitch
 FREESWITCH_INCLUDE=-I/usr/local/freeswitch/include/freeswitch
 
-TARGET_SER=mod_funasr.so
+TARGET_SER=mod_aliasr.so
 
 SER_OBJS=$(SER_SRCS:.c=.o)
 
