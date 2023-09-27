@@ -102,6 +102,15 @@ void onAsrTranscriptionStarted(NlsEvent *cbEvent, void *cbParam) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "I need lock!!!!!!!!!!!! \n");
             switch_mutex_unlock(pvt->mutex);
         }
+        switch_event_t *event = NULL;
+        if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
+            event->subclass_name = strdup("begin_asr");
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", tmpParam->sUUID);
+            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
+            switch_event_fire(&event);
+        }
+
         // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
         //  We meet : ... Locked, Waiting on external entities
         switch_core_session_rwunlock(ses);
