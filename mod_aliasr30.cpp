@@ -458,7 +458,7 @@ void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
  * @return switch_bool_t 
  */
 static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type) {
-    switch_da_t *pvt = (switch_da_t *) user_data;
+    auto *pvt = (switch_da_t *) user_data;
     switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
     switch (type) {
         case SWITCH_ABC_TYPE_INIT: {
@@ -529,8 +529,20 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
             frame.data = data;
             frame.buflen = sizeof(data);
             if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) != SWITCH_STATUS_FALSE) {
+                switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
+
+                // channel->caller_profile->times->answered = switch_micro_time_now();
+                // https://github.com/signalwire/freeswitch/blob/792eee44d0611422cce3c3194f95125916a7d268/src/switch_channel.c#L3834C3-L3834C70
+                const switch_time_t from_answered = switch_micro_time_now() - times->answered;
+//                frame.data;
+//                frame.datalen;
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "AUDIO: %ld - %d\n",
+                                  from_answered, frame.datalen);
+
                 switch_mutex_lock(pvt->mutex);
                 //====== resample ==== ///
+                // TODO, move to ASR start,bcs switch_codec_implementation_t will not change inside session
+
                 switch_codec_implementation_t read_impl;
                 memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
                 switch_core_session_get_read_impl(pvt->session, &read_impl);
