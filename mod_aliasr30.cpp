@@ -23,6 +23,20 @@ struct AsrParamCallBack {
 };
 
 //======================================== ali asr start ===============
+struct raw_pcm;
+
+typedef struct raw_pcm {
+    struct raw_pcm *_next;
+    switch_time_t _from_answered;
+    uint32_t _actual_samples_per_second;
+    int _microseconds_per_packet;
+    uint32_t _rawlen;
+    uint8_t _rawdata[];
+} raw_pcm_t;
+
+#define _OFFSET_OF(m,y) (uint8_t*)(&((m*)0)->y)
+const static int PCM_PAYLOAD_LEN = _OFFSET_OF(raw_pcm_t, _rawdata) - _OFFSET_OF(raw_pcm_t, _from_answered);
+
 typedef struct {
     switch_core_session_t *session;
     switch_media_bug_t *bug;
@@ -36,8 +50,11 @@ typedef struct {
     switch_audio_resampler_t *resampler = NULL;
     char *appkey = NULL;
     char *nlsurl = NULL;
+    char *pcmrec = NULL;
     char *asr_dec_vol = NULL;
     float vol_multiplier = 0.0f;
+    raw_pcm_t *pcm_header = NULL;
+    raw_pcm_t *pcm_tail = NULL;
 } switch_da_t;
 
 std::string g_akId = "";
@@ -388,6 +405,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load);
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown);
 
+void destroy_pcm(switch_da_t *pvt);
+
 extern "C"
 {
 SWITCH_MODULE_DEFINITION(mod_aliasr, mod_aliasr_load, mod_aliasr_shutdown, NULL);
@@ -479,7 +498,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                 if (pvt->starting == 0) {
                     pvt->starting = 1;
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
-                    AsrParamCallBack *cbParam = new AsrParamCallBack;
+                    auto *cbParam = new AsrParamCallBack;
                     cbParam->sUUID = switch_channel_get_uuid(channel);
                     switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
                     cbParam->caller = profile->caller_id_number;
@@ -529,16 +548,6 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
             frame.data = data;
             frame.buflen = sizeof(data);
             if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) != SWITCH_STATUS_FALSE) {
-                switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
-
-                // channel->caller_profile->times->answered = switch_micro_time_now();
-                // https://github.com/signalwire/freeswitch/blob/792eee44d0611422cce3c3194f95125916a7d268/src/switch_channel.c#L3834C3-L3834C70
-                const switch_time_t from_answered = switch_micro_time_now() - times->answered;
-//                frame.data;
-//                frame.datalen;
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "AUDIO: %ld - %d\n",
-                                  from_answered, frame.datalen);
-
                 switch_mutex_lock(pvt->mutex);
                 //====== resample ==== ///
                 // TODO, move to ASR start,bcs switch_codec_implementation_t will not change inside session
@@ -546,6 +555,27 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                 switch_codec_implementation_t read_impl;
                 memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
                 switch_core_session_get_read_impl(pvt->session, &read_impl);
+
+                switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
+
+                // channel->caller_profile->times->answered = switch_micro_time_now();
+                // https://github.com/signalwire/freeswitch/blob/792eee44d0611422cce3c3194f95125916a7d268/src/switch_channel.c#L3834C3-L3834C70
+                auto pcm = (raw_pcm_t*)malloc(sizeof(raw_pcm_t) + frame.datalen);
+                pcm->_next = nullptr;
+                pcm->_from_answered = switch_micro_time_now() - times->answered;
+                pcm->_actual_samples_per_second = read_impl.actual_samples_per_second;
+                pcm->_microseconds_per_packet = read_impl.microseconds_per_packet;
+                pcm->_rawlen = frame.datalen;
+                memcpy(pcm->_rawdata, frame.data, pcm->_rawlen);
+                if (!pvt->pcm_header) {
+                    pvt->pcm_tail = pvt->pcm_header = pcm;
+                } else {
+                    pvt->pcm_tail->_next = pcm;
+                    pvt->pcm_tail = pcm;
+                }
+//                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "AUDIO: %ld - %d\n",
+//                                  from_answered, frame.datalen);
+
                 int datalen = frame.datalen;
                 int16_t *dp = (int16_t *) frame.data;
                 if (read_impl.actual_samples_per_second != 8000) {
@@ -595,6 +625,28 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     return SWITCH_TRUE;
 }
 
+void save_pcm(switch_da_t *pvt, const char *filename) {
+    FILE *output = fopen(filename, "wb");
+    if (output) {
+        raw_pcm_t *pcm = pvt->pcm_header;
+        while (pcm) {
+            fwrite(&(pcm->_from_answered), PCM_PAYLOAD_LEN + pcm->_rawlen, 1, output);
+            pcm = pcm->_next;
+        }
+    }
+    fclose(output);
+}
+
+void destroy_pcm(switch_da_t *pvt) {
+    raw_pcm_t *pcm = pvt->pcm_header;
+    while (pcm) {
+        raw_pcm_t *pcm_next = pcm->_next;
+        free(pcm);
+        pcm = pcm_next;
+    }
+    pvt->pcm_header = pvt->pcm_tail = nullptr;
+}
+
 switch_status_t on_channel_destroy(switch_core_session_t *session) {
     switch_da_t *pvt;
     switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -612,6 +664,14 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
         }
         switch_mutex_destroy(pvt->mutex);
         switch_core_destroy_memory_pool(&pvt->pool);
+        if (pvt->pcm_header) {
+            // try to save pcms
+            if (pvt->pcmrec) {
+                save_pcm(pvt, pvt->pcmrec);
+            }
+            // then destroy pcms
+            destroy_pcm(pvt);
+        }
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
                           "%s on_destroy: switch_mutex_destroy & switch_core_destroy_memory_pool\n",
                           switch_channel_get_name(channel));
@@ -660,7 +720,7 @@ switch_state_handler_table_t asr_cs_handlers = {
         0
 };
 
-// uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> debug=<true/false>
+// uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> debug=<true/false> pcmrec=<local path>
 #define MAX_API_ARGC 5
 
 SWITCH_STANDARD_API(uuid_start_aliasr_function) {
@@ -674,6 +734,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     char *_appkey = NULL;
     char *_nlsurl = NULL;
     char *_asr_dec_vol = NULL;
+    char *_pcmrec = NULL;
 //    bool        _debug = false;
 
     switch_memory_pool_t *pool;
@@ -718,6 +779,10 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
                     _asr_dec_vol = val;
                     continue;
                 }
+                if (!strcasecmp(var, "pcmrec")) {
+                    _pcmrec = val;
+                    continue;
+                }
             }
         }
     }
@@ -744,7 +809,8 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         pvt->session = ses;
         pvt->appkey = switch_core_session_strdup(ses, _appkey);
         pvt->nlsurl = switch_core_session_strdup(ses, _nlsurl);
-        pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(ses, _asr_dec_vol) : NULL;
+        pvt->pcmrec = _pcmrec ? switch_core_session_strdup(ses, _pcmrec) : nullptr;
+        pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(ses, _asr_dec_vol) : nullptr;
         if (pvt->asr_dec_vol) {
             double db = atof(pvt->asr_dec_vol);
             pvt->vol_multiplier = pow(10, db / 20);
