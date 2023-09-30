@@ -47,14 +47,14 @@ typedef struct {
     int datalen;
     switch_mutex_t *mutex;
     switch_memory_pool_t *pool;
-    switch_audio_resampler_t *resampler = NULL;
-    char *appkey = NULL;
-    char *nlsurl = NULL;
-    char *pcmrec = NULL;
-    char *asr_dec_vol = NULL;
+    switch_audio_resampler_t *resampler = nullptr;
+    char *appkey = nullptr;
+    char *nlsurl = nullptr;
+    char *pcmrec = nullptr;
+    char *asr_dec_vol = nullptr;
     float vol_multiplier = 0.0f;
-    raw_pcm_t *pcm_header = NULL;
-    raw_pcm_t *pcm_tail = NULL;
+    raw_pcm_t *pcm_header = nullptr;
+    raw_pcm_t *pcm_tail = nullptr;
 } switch_da_t;
 
 std::string g_akId = "";
@@ -405,8 +405,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load);
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown);
 
-void destroy_pcm(switch_da_t *pvt);
-
 extern "C"
 {
 SWITCH_MODULE_DEFINITION(mod_aliasr, mod_aliasr_load, mod_aliasr_shutdown, NULL);
@@ -569,12 +567,12 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                 memcpy(pcm->_rawdata, frame.data, pcm->_rawlen);
                 if (!pvt->pcm_header) {
                     pvt->pcm_tail = pvt->pcm_header = pcm;
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "init pcms\n");
                 } else {
                     pvt->pcm_tail->_next = pcm;
                     pvt->pcm_tail = pcm;
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "add 1 pcm\n");
                 }
-//                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "AUDIO: %ld - %d\n",
-//                                  from_answered, frame.datalen);
 
                 int datalen = frame.datalen;
                 int16_t *dp = (int16_t *) frame.data;
@@ -633,8 +631,11 @@ void save_pcm(switch_da_t *pvt, const char *filename) {
             fwrite(&(pcm->_from_answered), PCM_PAYLOAD_LEN + pcm->_rawlen, 1, output);
             pcm = pcm->_next;
         }
+        fclose(output);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n",
+                          pvt->pcmrec);
     }
-    fclose(output);
 }
 
 void destroy_pcm(switch_da_t *pvt) {
@@ -645,6 +646,16 @@ void destroy_pcm(switch_da_t *pvt) {
         pcm = pcm_next;
     }
     pvt->pcm_header = pvt->pcm_tail = nullptr;
+}
+
+int count_pcm(switch_da_t *pvt) {
+    int count = 0;
+    raw_pcm_t *pcm = pvt->pcm_header;
+    while (pcm) {
+        count++;
+        pcm = pcm->_next;
+    }
+    return count;
 }
 
 switch_status_t on_channel_destroy(switch_core_session_t *session) {
@@ -667,7 +678,11 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
         if (pvt->pcm_header) {
             // try to save pcms
             if (pvt->pcmrec) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "before save pcms to %s and pcm count: %d\n",
+                                  pvt->pcmrec, count_pcm(pvt));
                 save_pcm(pvt, pvt->pcmrec);
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "after save pcms\n",
+                                  pvt->pcmrec, count_pcm(pvt));
             }
             // then destroy pcms
             destroy_pcm(pvt);
@@ -730,11 +745,11 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     }
 
     switch_status_t status = SWITCH_STATUS_SUCCESS;
-    switch_core_session_t *ses = NULL;
-    char *_appkey = NULL;
-    char *_nlsurl = NULL;
-    char *_asr_dec_vol = NULL;
-    char *_pcmrec = NULL;
+    switch_core_session_t *ses = nullptr;
+    char *_appkey = nullptr;
+    char *_nlsurl = nullptr;
+    char *_asr_dec_vol = nullptr;
+    char *_pcmrec = nullptr;
 //    bool        _debug = false;
 
     switch_memory_pool_t *pool;
@@ -753,7 +768,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     }
 
     for (int idx = 1; idx < MAX_API_ARGC; idx++) {
-        if (argv[idx] != NULL) {
+        if (argv[idx]) {
             char *ss[2] = {0, 0};
             int cnt = switch_split(argv[idx], '=', ss);
             if (cnt == 2) {
@@ -787,7 +802,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         }
     }
 
-    if (_appkey == NULL || _nlsurl == NULL) {
+    if (!_appkey || !_nlsurl) {
         stream->write_function(stream, "appkey and nls are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
