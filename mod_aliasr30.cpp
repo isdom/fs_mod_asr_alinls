@@ -681,8 +681,7 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "before save pcms to %s and pcm count: %d\n",
                                   pvt->pcmrec, count_pcm(pvt));
                 save_pcm(pvt, pvt->pcmrec);
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "after save pcms\n",
-                                  pvt->pcmrec, count_pcm(pvt));
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "after save pcms\n");
             }
             // then destroy pcms
             destroy_pcm(pvt);
