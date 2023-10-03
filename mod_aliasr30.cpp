@@ -52,7 +52,7 @@ typedef struct {
     switch_audio_resampler_t *resampler = nullptr;
     char *appkey = nullptr;
     char *nlsurl = nullptr;
-    char *pcmrec = nullptr;
+    char *savepcm = nullptr;
     char *asr_dec_vol = nullptr;
     float vol_multiplier = 0.0f;
     raw_pcm_t *pcm_header = nullptr;
@@ -468,6 +468,29 @@ void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
     }
 }
 
+static void append_current_pcm(switch_da_t *pvt,
+                               switch_channel_t *channel,
+                               const switch_frame_t &frame,
+                               const switch_codec_implementation_t &read_impl) {
+    switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
+
+    // channel->caller_profile->times->answered = switch_micro_time_now();
+// https://github.com/signalwire/freeswitch/blob/792eee44d0611422cce3c3194f95125916a7d268/src/switch_channel.c#L3834C3-L3834C70
+    auto pcm = (raw_pcm_t*)malloc(sizeof(raw_pcm_t) + frame.datalen);
+    pcm->_next = nullptr;
+    pcm->_from_answered = switch_micro_time_now() - times->answered;
+    pcm->_actual_samples_per_second = read_impl.actual_samples_per_second;
+    pcm->_microseconds_per_packet = read_impl.microseconds_per_packet;
+    pcm->_rawlen = frame.datalen;
+    memcpy(pcm->_rawdata, frame.data, pcm->_rawlen);
+    if (!pvt->pcm_header) {
+        pvt->pcm_tail = pvt->pcm_header = pcm;
+    } else {
+        pvt->pcm_tail->_next = pcm;
+        pvt->pcm_tail = pcm;
+    }
+}
+
 /**
  * asr 回调处理
  * 
@@ -556,24 +579,8 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
                 memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
                 switch_core_session_get_read_impl(pvt->session, &read_impl);
 
-                switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
-
-                // channel->caller_profile->times->answered = switch_micro_time_now();
-                // https://github.com/signalwire/freeswitch/blob/792eee44d0611422cce3c3194f95125916a7d268/src/switch_channel.c#L3834C3-L3834C70
-                auto pcm = (raw_pcm_t*)malloc(sizeof(raw_pcm_t) + frame.datalen);
-                pcm->_next = nullptr;
-                pcm->_from_answered = switch_micro_time_now() - times->answered;
-                pcm->_actual_samples_per_second = read_impl.actual_samples_per_second;
-                pcm->_microseconds_per_packet = read_impl.microseconds_per_packet;
-                pcm->_rawlen = frame.datalen;
-                memcpy(pcm->_rawdata, frame.data, pcm->_rawlen);
-                if (!pvt->pcm_header) {
-                    pvt->pcm_tail = pvt->pcm_header = pcm;
-//                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "init pcms\n");
-                } else {
-                    pvt->pcm_tail->_next = pcm;
-                    pvt->pcm_tail = pcm;
-//                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "add 1 pcm\n");
+                if (pvt->savepcm) {
+                    append_current_pcm(pvt, channel, frame, read_impl);
                 }
 
                 int datalen = frame.datalen;
@@ -636,7 +643,7 @@ void save_pcm_to(switch_da_t *pvt, const char *filename) {
         fclose(output);
     } else {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n",
-                          pvt->pcmrec);
+                          pvt->savepcm);
     }
 }
 
@@ -674,7 +681,7 @@ void load_pcm_from(switch_da_t *pvt, const char *filename) {
         fclose(input);
     } else {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n",
-                          pvt->pcmrec);
+                          pvt->savepcm);
     }
 }
 
@@ -839,8 +846,8 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
         switch_core_destroy_memory_pool(&pvt->pool);
         if (pvt->pcm_header) {
             // try to save pcms
-            if (pvt->pcmrec) {
-                save_pcm_to(pvt, pvt->pcmrec);
+            if (pvt->savepcm) {
+                save_pcm_to(pvt, pvt->savepcm);
             }
             // then destroy pcms
             release_pcm(pvt);
@@ -895,10 +902,8 @@ switch_state_handler_table_t asr_cs_handlers = {
 
 #define MAX_API_ARGC 5
 
-// uuid_replay_aliasr <uuid> appkey=<appkey> nls=<nlsurl> pcmrec=<local path> debug=<true/false>
+// uuid_replay_aliasr <uuid> appkey=<appkey> nls=<nlsurl> loadpcm=<local path> debug=<true/false>
 SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
-    switch_thread_create;
-
     if (zstr(cmd)) {
         stream->write_function(stream, "uuid_replay_aliasr: parameter missing.\n");
         return SWITCH_STATUS_SUCCESS;
@@ -909,7 +914,7 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
     char *_appkey = nullptr;
     char *_nlsurl = nullptr;
     char *_asr_dec_vol = nullptr;
-    char *_pcmrec = nullptr;
+    char *_loadpcm = nullptr;
 //    bool        _debug = false;
 
     switch_memory_pool_t *pool;
@@ -953,16 +958,16 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
                     _asr_dec_vol = val;
                     continue;
                 }
-                if (!strcasecmp(var, "pcmrec")) {
-                    _pcmrec = val;
+                if (!strcasecmp(var, "loadpcm")) {
+                    _loadpcm = val;
                     continue;
                 }
             }
         }
     }
 
-    if (!_appkey || !_nlsurl || !_pcmrec) {
-        stream->write_function(stream, "appkey/nls/pcmrec are required.\n");
+    if (!_appkey || !_nlsurl || !_loadpcm) {
+        stream->write_function(stream, "appkey/nls/loadpcm are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
@@ -988,7 +993,6 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
         pvt->session = ses;
         pvt->appkey = switch_core_session_strdup(ses, _appkey);
         pvt->nlsurl = switch_core_session_strdup(ses, _nlsurl);
-        pvt->pcmrec = switch_core_session_strdup(ses, _pcmrec);
         pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(ses, _asr_dec_vol) : nullptr;
         if (pvt->asr_dec_vol) {
             double db = atof(pvt->asr_dec_vol);
@@ -1006,7 +1010,7 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook cs state change failed!\n");
         }
 
-        load_pcm_from(pvt, pvt->pcmrec);
+        load_pcm_from(pvt, _loadpcm);
 
         switch_threadattr_create(&thd_attr, pvt->pool);
         switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
@@ -1026,7 +1030,7 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
     return status;
 }
 
-// uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> debug=<true/false> pcmrec=<local path>
+// uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> debug=<true/false> savepcm=<local path>
 SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     if (zstr(cmd)) {
         stream->write_function(stream, "uuid_start_aliasr: parameter missing.\n");
@@ -1038,7 +1042,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     char *_appkey = nullptr;
     char *_nlsurl = nullptr;
     char *_asr_dec_vol = nullptr;
-    char *_pcmrec = nullptr;
+    char *_savepcm = nullptr;
 //    bool        _debug = false;
 
     switch_memory_pool_t *pool;
@@ -1083,8 +1087,8 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
                     _asr_dec_vol = val;
                     continue;
                 }
-                if (!strcasecmp(var, "pcmrec")) {
-                    _pcmrec = val;
+                if (!strcasecmp(var, "savepcm")) {
+                    _savepcm = val;
                     continue;
                 }
             }
@@ -1116,7 +1120,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         pvt->session = ses;
         pvt->appkey = switch_core_session_strdup(ses, _appkey);
         pvt->nlsurl = switch_core_session_strdup(ses, _nlsurl);
-        pvt->pcmrec = _pcmrec ? switch_core_session_strdup(ses, _pcmrec) : nullptr;
+        pvt->savepcm = _savepcm ? switch_core_session_strdup(ses, _savepcm) : nullptr;
         pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(ses, _asr_dec_vol) : nullptr;
         if (pvt->asr_dec_vol) {
             double db = atof(pvt->asr_dec_vol);
