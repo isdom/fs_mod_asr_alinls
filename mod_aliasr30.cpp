@@ -642,8 +642,7 @@ void save_pcm_to(switch_da_t *pvt, const char *filename) {
         }
         fclose(output);
     } else {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n",
-                          pvt->savepcm);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
     }
 }
 
@@ -680,8 +679,7 @@ void load_pcm_from(switch_da_t *pvt, const char *filename) {
 
         fclose(input);
     } else {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n",
-                          pvt->savepcm);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
     }
 }
 
@@ -756,9 +754,12 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
         }
     }
     switch_mutex_unlock(pvt->mutex);
-
+    int idx = 0;
     while (current) {
-        if (current->_from_answered <= switch_micro_time_now() - times->answered) {
+        switch_time_t duration = switch_micro_time_now() - times->answered;
+        if (current->_from_answered <= duration) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+                              "(%d)-> org:%ld, replay:%ld\n", idx++, duration, current->_from_answered);
             // replay to asr
             switch_mutex_lock(pvt->mutex);
 
