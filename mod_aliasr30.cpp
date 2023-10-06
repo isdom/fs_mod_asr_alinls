@@ -721,6 +721,7 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "read_codec=[%s]!\n",
                       read_codec->implementation->iananame);
 
+    int idx = 0;
     switch_mutex_lock(pvt->mutex);
     if (pvt->started == 0) {
         if (pvt->starting == 0) {
@@ -754,7 +755,6 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
         }
     }
     switch_mutex_unlock(pvt->mutex);
-    int idx = 0;
     while (current) {
         switch_time_t duration = switch_micro_time_now() - times->answered;
         if (current->_from_answered <= duration) {
