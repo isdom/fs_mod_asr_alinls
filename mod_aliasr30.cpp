@@ -756,10 +756,10 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
     }
     switch_mutex_unlock(pvt->mutex);
     while (current) {
-        switch_time_t duration = switch_micro_time_now() - times->answered;
+        const switch_time_t duration = switch_micro_time_now() - times->answered;
         if (current->_from_answered <= duration) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                              "(%d)-> org:%ld, replay:%ld\n", idx++, duration, current->_from_answered);
+                              "(%d)-> org:%ld, replay:%ld\n", idx++, current->_from_answered, duration);
             // replay to asr
             switch_mutex_lock(pvt->mutex);
 
@@ -800,10 +800,10 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
                                   current->_rawlen);
             }
             switch_mutex_unlock(pvt->mutex);
+            current = current->_next;
         } else {
             switch_yield(10 * 1000);
         }
-        current = current->_next;
     }
 
     end:
