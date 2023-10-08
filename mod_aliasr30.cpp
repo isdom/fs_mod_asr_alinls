@@ -27,11 +27,14 @@ struct AsrParamCallBack {
 //======================================== ali asr start ===============
 struct raw_pcm;
 
+typedef struct pcm_hdr {
+    uint32_t _actual_samples_per_second = 0;
+    int _microseconds_per_packet = 0;
+} pcm_hdr_t;
+
 typedef struct raw_pcm {
     struct raw_pcm *_next;
     switch_time_t _from_answered;
-    uint32_t _actual_samples_per_second;
-    int _microseconds_per_packet;
     uint32_t _rawlen;
     uint8_t _rawdata[];
 } raw_pcm_t;
@@ -39,22 +42,23 @@ typedef struct raw_pcm {
 #define _OFFSET_OF(m,y) (uint8_t*)(&((m*)0)->y)
 const static int PCM_PAYLOAD_LEN = _OFFSET_OF(raw_pcm_t, _rawdata) - _OFFSET_OF(raw_pcm_t, _from_answered);
 
-typedef struct {
-    switch_core_session_t *session;
+typedef struct switch_da {
+    switch_core_session_t *session = nullptr;
     switch_media_bug_t *bug = nullptr;
     SpeechTranscriberRequest *request = nullptr;
-    int started;
-    int stoped;
-    int starting;
-    int datalen;
-    switch_mutex_t *mutex;
-    switch_memory_pool_t *pool;
+    int started = 0;
+    int stoped = 0;
+    int starting = 0;
+    int datalen = 0;
+    switch_mutex_t *mutex = nullptr;
+    switch_memory_pool_t *pool = nullptr;
     switch_audio_resampler_t *resampler = nullptr;
     char *appkey = nullptr;
     char *nlsurl = nullptr;
     char *savepcm = nullptr;
     char *asr_dec_vol = nullptr;
     float vol_multiplier = 0.0f;
+    pcm_hdr_t _pcm_hdr;
     raw_pcm_t *pcm_header = nullptr;
     raw_pcm_t *pcm_tail = nullptr;
 } switch_da_t;
@@ -470,8 +474,7 @@ void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
 
 static void append_current_pcm(switch_da_t *pvt,
                                switch_channel_t *channel,
-                               const switch_frame_t &frame,
-                               const switch_codec_implementation_t &read_impl) {
+                               const switch_frame_t &frame) {
     switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
 
     // channel->caller_profile->times->answered = switch_micro_time_now();
@@ -479,8 +482,6 @@ static void append_current_pcm(switch_da_t *pvt,
     auto pcm = (raw_pcm_t*)malloc(sizeof(raw_pcm_t) + frame.datalen);
     pcm->_next = nullptr;
     pcm->_from_answered = switch_micro_time_now() - times->answered;
-    pcm->_actual_samples_per_second = read_impl.actual_samples_per_second;
-    pcm->_microseconds_per_packet = read_impl.microseconds_per_packet;
     pcm->_rawlen = frame.datalen;
     memcpy(pcm->_rawdata, frame.data, pcm->_rawlen);
     if (!pvt->pcm_header) {
@@ -489,6 +490,113 @@ static void append_current_pcm(switch_da_t *pvt,
         pvt->pcm_tail->_next = pcm;
         pvt->pcm_tail = pcm;
     }
+}
+
+static void handleABCTypeRead(switch_media_bug_t *bug, switch_da_t *pvt, switch_channel_t *channel) {
+    uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
+    switch_frame_t frame = {0};
+    frame.data = data;
+    frame.buflen = sizeof(data);
+    if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) != SWITCH_STATUS_FALSE) {
+        switch_mutex_lock(pvt->mutex);
+
+        if (pvt->savepcm) {
+            append_current_pcm(pvt, channel, frame);
+        }
+
+        uint32_t data_len = frame.datalen;
+        auto *dp = (int16_t *) frame.data;
+
+        if (pvt->resampler) {
+            //====== resample ==== ///
+            switch_resample_process(pvt->resampler, dp, (int) data_len / 2 / 1);
+            memcpy(dp, pvt->resampler->to, pvt->resampler->to_len * 2 * 1);
+            data_len = pvt->resampler->to_len * 2 * 1;
+            if (g_debug) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", pvt->resampler->to_len);
+            }
+        }
+        if (pvt->asr_dec_vol) {
+            adjustVolume((int16_t *) dp, (size_t) data_len / 2, pvt->vol_multiplier);
+        }
+        if (pvt->request->sendAudio((uint8_t *) dp, (size_t) data_len) < 0) {
+            pvt->stoped = 1;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "send audio failed:%s\n",
+                              switch_channel_get_name(channel));
+            pvt->request->stop();
+            NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+        }
+        if (g_debug) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "SWITCH_ABC_TYPE_READ: send audio %d\n",
+                              data_len);
+        }
+        switch_mutex_unlock(pvt->mutex);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_core_media_bug_read failed\n");
+    }
+}
+
+static void handleABCTypeClose(switch_da_t *pvt, switch_channel_t *channel) {
+    if (pvt->request) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
+                          switch_channel_get_name(channel));
+        pvt->request->stop();
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr stoped:%s\n",
+                          switch_channel_get_name(channel));
+        //7: 识别结束, 释放request对象
+        NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n",
+                          switch_channel_get_name(channel));
+    }
+}
+
+static void handleABCTypeInit(switch_da_t *pvt, switch_channel_t *channel) {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Channel Init:%s\n",
+              switch_channel_get_name(channel));
+
+    switch_codec_t *read_codec = switch_core_session_get_read_codec(pvt->session);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "read_codec=[%s]!\n",
+                      read_codec->implementation->iananame);
+
+    if (pvt->stoped == 1) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "SWITCH_ABC_TYPE_INIT: pvt->stoped\n");
+        return;
+    }
+
+    switch_mutex_lock(pvt->mutex);
+    if (pvt->started == 0) {
+        if (pvt->starting == 0) {
+            pvt->starting = 1;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
+            auto *cbParam = new AsrParamCallBack;
+            cbParam->sUUID = switch_channel_get_uuid(channel);
+            switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
+            cbParam->caller = profile->caller_id_number;
+            cbParam->callee = profile->callee_id_number;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
+                              cbParam->caller.c_str(), cbParam->callee.c_str());
+            SpeechTranscriberRequest *request = generateAsrRequest(cbParam, pvt);
+            if (!request) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
+                                  switch_channel_get_name(channel));
+                goto unlock;
+            }
+            pvt->request = request;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init SpeechTranscriberRequest.%s\n",
+                              switch_channel_get_name(channel));
+            if (pvt->request->start() < 0) {
+                pvt->stoped = 1;
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+                                  "start() failed. may be can not connect server. please check network or firewalld:%s\n",
+                                  switch_channel_get_name(channel));
+                NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+                // start()失败，释放request对象
+            }
+        }
+    }
+
+    unlock:
+    switch_mutex_unlock(pvt->mutex);
 }
 
 /**
@@ -503,128 +611,14 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     auto *pvt = (switch_da_t *) user_data;
     switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
     switch (type) {
-        case SWITCH_ABC_TYPE_INIT: {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Channel Init:%s\n",
-                              switch_channel_get_name(channel));
-
-            switch_codec_t *read_codec = switch_core_session_get_read_codec(pvt->session);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "read_codec=[%s]!\n",
-                              read_codec->implementation->iananame);
-
-            if (pvt->stoped == 1) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "SWITCH_ABC_TYPE_INIT: pvt->stoped\n");
-                return SWITCH_TRUE;
-            }
-
-            switch_mutex_lock(pvt->mutex);
-            if (pvt->started == 0) {
-                if (pvt->starting == 0) {
-                    pvt->starting = 1;
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
-                    auto *cbParam = new AsrParamCallBack;
-                    cbParam->sUUID = switch_channel_get_uuid(channel);
-                    switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
-                    cbParam->caller = profile->caller_id_number;
-                    cbParam->callee = profile->callee_id_number;
-                    SpeechTranscriberRequest *request = generateAsrRequest(cbParam, pvt);
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
-                                      cbParam->caller.c_str(), cbParam->callee.c_str());
-                    if (!request) {
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
-                                          switch_channel_get_name(channel));
-                        switch_mutex_unlock(pvt->mutex);
-                        return SWITCH_TRUE;
-                    }
-                    pvt->request = request;
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init SpeechTranscriberRequest.%s\n",
-                                      switch_channel_get_name(channel));
-                    if (pvt->request->start() < 0) {
-                        pvt->stoped = 1;
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                                          "start() failed. may be can not connect server. please check network or firewalld:%s\n",
-                                          switch_channel_get_name(channel));
-                        NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
-                        // start()失败，释放request对象
-                    }
-                }
-            }
-            switch_mutex_unlock(pvt->mutex);
-        }
+        case SWITCH_ABC_TYPE_INIT:
+            handleABCTypeInit(pvt, channel);
             break;
-        case SWITCH_ABC_TYPE_CLOSE: {
-            if (pvt->request) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
-                                  switch_channel_get_name(channel));
-                pvt->request->stop();
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr stoped:%s\n",
-                                  switch_channel_get_name(channel));
-                //7: 识别结束, 释放request对象
-                NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n",
-                                  switch_channel_get_name(channel));
-            }
-        }
+        case SWITCH_ABC_TYPE_CLOSE:
+            handleABCTypeClose(pvt, channel);
             break;
-        case SWITCH_ABC_TYPE_READ: {
-            uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
-            switch_frame_t frame = {0};
-            frame.data = data;
-            frame.buflen = sizeof(data);
-            if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) != SWITCH_STATUS_FALSE) {
-                switch_mutex_lock(pvt->mutex);
-                //====== resample ==== ///
-                // TODO, move to ASR start,bcs switch_codec_implementation_t will not change inside session
-
-                switch_codec_implementation_t read_impl;
-                memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
-                switch_core_session_get_read_impl(pvt->session, &read_impl);
-
-                if (pvt->savepcm) {
-                    append_current_pcm(pvt, channel, frame, read_impl);
-                }
-
-                int datalen = frame.datalen;
-                int16_t *dp = (int16_t *) frame.data;
-                if (read_impl.actual_samples_per_second != 8000) {
-                    if (!pvt->resampler) {
-                        if (switch_resample_create(&pvt->resampler,
-                                                   read_impl.actual_samples_per_second,
-                                                   8000,
-                                                   8 * (read_impl.microseconds_per_packet / 1000) * 2,
-                                                   SWITCH_RESAMPLE_QUALITY,
-                                                   1) != SWITCH_STATUS_SUCCESS) {
-                            switch_mutex_unlock(pvt->mutex);
-                            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
-                            return SWITCH_FALSE;
-                        }
-                    }
-                    switch_resample_process(pvt->resampler, dp, (int) datalen / 2 / 1);
-                    memcpy(dp, pvt->resampler->to, pvt->resampler->to_len * 2 * 1);
-                    int samples = pvt->resampler->to_len;
-                    datalen = pvt->resampler->to_len * 2 * 1;
-                    if (g_debug) {
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", samples);
-                    }
-                }
-                if (pvt->asr_dec_vol) {
-                    adjustVolume((int16_t *) dp, (size_t) datalen / 2, pvt->vol_multiplier);
-                }
-                if (pvt->request->sendAudio((uint8_t *) dp, (size_t) datalen) < 0) {
-                    pvt->stoped = 1;
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "send audio failed:%s\n",
-                                      switch_channel_get_name(channel));
-                    pvt->request->stop();
-                    NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
-                }
-                if (g_debug) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "SWITCH_ABC_TYPE_READ: send audio %d\n",
-                                      datalen);
-                }
-                switch_mutex_unlock(pvt->mutex);
-            } else {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_core_media_bug_read failed\n");
-            }
-        }
+        case SWITCH_ABC_TYPE_READ:
+            handleABCTypeRead(bug, pvt, channel);
             break;
         default:
             break;
@@ -634,38 +628,44 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
 
 void save_pcm_to(switch_da_t *pvt, const char *filename) {
     FILE *output = fopen(filename, "wb");
-    if (output) {
-        raw_pcm_t *pcm = pvt->pcm_header;
-        while (pcm) {
-            fwrite(&(pcm->_from_answered), PCM_PAYLOAD_LEN + pcm->_rawlen, 1, output);
-            pcm = pcm->_next;
-        }
-        fclose(output);
-    } else {
+    if (!output) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
+        return;
     }
+    fwrite(&(pvt->_pcm_hdr), sizeof(pcm_hdr_t), 1, output);
+
+    raw_pcm_t *current = pvt->pcm_header;
+    while (current) {
+        fwrite(&(current->_from_answered), PCM_PAYLOAD_LEN + current->_rawlen, 1, output);
+        current = current->_next;
+    }
+    fclose(output);
 }
 
 void load_pcm_from(switch_da_t *pvt, const char *filename) {
     FILE *input = fopen(filename, "rb");
-    if (input) {
-        while(!feof(input)) {
-            raw_pcm_t hdr;
-
-            if (fread(&(hdr._from_answered), PCM_PAYLOAD_LEN, 1, input) <= 0) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read raw_pcm_t hdr failed\n");
+    if (!input) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
+        return;
+    }
+    if (fread(&(pvt->_pcm_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_hdr_t failed\n");
+    } else {
+        int idx = 0;
+        while (!feof(input)) {
+            raw_pcm_t fixed;
+            if (fread(&(fixed._from_answered), PCM_PAYLOAD_LEN, 1, input) <= 0) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read raw_pcm_t fixed failed\n");
             } else {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "read raw_pcm_t hdr, _rawlen: %d\n",
-                                  hdr._rawlen);
-                auto pcm = (raw_pcm_t*)malloc(sizeof(raw_pcm_t) + hdr._rawlen);
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read raw_pcm_t fixed, _rawlen: %d\n",
+                                  idx++, fixed._rawlen);
+                auto pcm = (raw_pcm_t *) malloc(sizeof(raw_pcm_t) + fixed._rawlen);
                 pcm->_next = nullptr;
-                pcm->_from_answered = hdr._from_answered;
-                pcm->_actual_samples_per_second = hdr._actual_samples_per_second;
-                pcm->_microseconds_per_packet = hdr._microseconds_per_packet;
-                pcm->_rawlen = hdr._rawlen;
-                if (fread(pcm->_rawdata, hdr._rawlen, 1, input) <= 0) {
+                pcm->_from_answered = fixed._from_answered;
+                pcm->_rawlen = fixed._rawlen;
+                if (fread(pcm->_rawdata, fixed._rawlen, 1, input) <= 0) {
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read _rawdata(%d) failed\n",
-                                      hdr._rawlen);
+                                      fixed._rawlen);
                 } else {
                     if (!pvt->pcm_header) {
                         pvt->pcm_tail = pvt->pcm_header = pcm;
@@ -676,11 +676,9 @@ void load_pcm_from(switch_da_t *pvt, const char *filename) {
                 }
             }
         }
-
-        fclose(input);
-    } else {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
     }
+
+    fclose(input);
 }
 
 void release_pcm(switch_da_t *pvt) {
@@ -763,26 +761,13 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
             // replay to asr
             switch_mutex_lock(pvt->mutex);
 
-            //====== resample ==== ///
-            if (current->_actual_samples_per_second != 8000) {
-                if (!pvt->resampler) {
-                    if (switch_resample_create(&pvt->resampler,
-                                               current->_actual_samples_per_second,
-                                               8000,
-                                               8 * (current->_microseconds_per_packet / 1000) * 2,
-                                               SWITCH_RESAMPLE_QUALITY,
-                                               1) != SWITCH_STATUS_SUCCESS) {
-                        switch_mutex_unlock(pvt->mutex);
-                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
-                        goto end;
-                    }
-                }
+            if (pvt->resampler) {
+                //====== resample ==== ///
                 switch_resample_process(pvt->resampler, (int16_t *)current->_rawdata, (int) current->_rawlen / 2 / 1);
                 memcpy(current->_rawdata, pvt->resampler->to, pvt->resampler->to_len * 2 * 1);
-                int samples = pvt->resampler->to_len;
                 current->_rawlen = pvt->resampler->to_len * 2 * 1;
                 if (g_debug) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", samples);
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", pvt->resampler->to_len);
                 }
             }
             if (pvt->asr_dec_vol) {
@@ -1013,6 +998,18 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
 
         load_pcm_from(pvt, _loadpcm);
 
+        if (pvt->_pcm_hdr._actual_samples_per_second != SAMPLE_RATE) {
+            if (switch_resample_create(&pvt->resampler,
+                                       pvt->_pcm_hdr._actual_samples_per_second,
+                                       SAMPLE_RATE,
+                                       8 * (pvt->_pcm_hdr._microseconds_per_packet / 1000) * 2,
+                                       SWITCH_RESAMPLE_QUALITY,
+                                       1) != SWITCH_STATUS_SUCCESS) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
+                switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
+            }
+        }
+
         switch_threadattr_create(&thd_attr, pvt->pool);
         switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
 
@@ -1029,6 +1026,14 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
     end:
     switch_core_destroy_memory_pool(&pool);
     return status;
+}
+
+static void init_pcm_hdr(switch_core_session_t *session, pcm_hdr_t *hdr) {
+    switch_codec_implementation_t read_impl;
+    memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
+    switch_core_session_get_read_impl(session, &read_impl);
+    hdr->_actual_samples_per_second = read_impl.actual_samples_per_second;
+    hdr->_microseconds_per_packet = read_impl.microseconds_per_packet;
 }
 
 // uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> debug=<true/false> savepcm=<local path>
@@ -1132,6 +1137,21 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
         }
         switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
+
+        init_pcm_hdr(ses, &pvt->_pcm_hdr);
+
+        if (pvt->_pcm_hdr._actual_samples_per_second != SAMPLE_RATE) {
+            if (switch_resample_create(&pvt->resampler,
+                                       pvt->_pcm_hdr._actual_samples_per_second,
+                                       SAMPLE_RATE,
+                                       8 * (pvt->_pcm_hdr._microseconds_per_packet / 1000) * 2,
+                                       SWITCH_RESAMPLE_QUALITY,
+                                       1) != SWITCH_STATUS_SUCCESS) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
+                switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
+            }
+        }
+
         //session添加media bug
         if ((status = switch_core_media_bug_add(ses, "asr", NULL,
                                                 asr_callback, pvt, 0,
