@@ -6,6 +6,7 @@
 #include "speechTranscriberRequest.h"
 #include "nlsCommonSdk/Token.h"
 #include <sys/time.h>
+#include <map>
 
 // #include <libks/ks_thread_pool.h>
 
@@ -17,6 +18,13 @@ using AlibabaNls::NlsClient;
 using AlibabaNls::NlsEvent;
 using AlibabaNls::LogDebug;
 using AlibabaNls::SpeechTranscriberRequest;
+
+std::string g_akId = "";
+std::string g_akSecret = "";
+std::string g_token = "";
+long g_expireTime = -1;
+bool g_debug = false;
+
 
 struct AsrParamCallBack {
     std::string caller;
@@ -42,6 +50,14 @@ typedef struct raw_pcm {
 #define _OFFSET_OF(m,y) (uint8_t*)(&((m*)0)->y)
 const static int PCM_PAYLOAD_LEN = _OFFSET_OF(raw_pcm_t, _rawdata) - _OFFSET_OF(raw_pcm_t, _from_answered);
 
+typedef struct pcm_track {
+    pcm_hdr_t _hdr;
+    raw_pcm_t *_header = nullptr;
+    raw_pcm_t *_tail = nullptr;
+} pcm_track_t;
+
+std::map<std::string, pcm_track_t*> g_pcm_tracks;
+
 typedef struct switch_da {
     switch_core_session_t *session = nullptr;
     switch_media_bug_t *bug = nullptr;
@@ -58,16 +74,8 @@ typedef struct switch_da {
     char *savepcm = nullptr;
     char *asr_dec_vol = nullptr;
     float vol_multiplier = 0.0f;
-    pcm_hdr_t _pcm_hdr;
-    raw_pcm_t *pcm_header = nullptr;
-    raw_pcm_t *pcm_tail = nullptr;
+    pcm_track_t *_track = nullptr;
 } switch_da_t;
-
-std::string g_akId = "";
-std::string g_akSecret = "";
-std::string g_token = "";
-long g_expireTime = -1;
-bool g_debug = false;
 
 SpeechTranscriberRequest *generateAsrRequest(AsrParamCallBack *cbParam, switch_da_t *pvt);
 
@@ -472,6 +480,15 @@ void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
     }
 }
 
+void append_raw_pcm(pcm_track_t *track, raw_pcm_t *slice) {
+    if (!track->_header) {
+        track->_tail = track->_header = slice;
+    } else {
+        track->_tail->_next = slice;
+        track->_tail = slice;
+    }
+}
+
 static void append_current_pcm(switch_da_t *pvt,
                                switch_channel_t *channel,
                                const switch_frame_t &frame) {
@@ -479,17 +496,12 @@ static void append_current_pcm(switch_da_t *pvt,
 
     // channel->caller_profile->times->answered = switch_micro_time_now();
 // https://github.com/signalwire/freeswitch/blob/792eee44d0611422cce3c3194f95125916a7d268/src/switch_channel.c#L3834C3-L3834C70
-    auto pcm = (raw_pcm_t*)malloc(sizeof(raw_pcm_t) + frame.datalen);
-    pcm->_next = nullptr;
-    pcm->_from_answered = switch_micro_time_now() - times->answered;
-    pcm->_rawlen = frame.datalen;
-    memcpy(pcm->_rawdata, frame.data, pcm->_rawlen);
-    if (!pvt->pcm_header) {
-        pvt->pcm_tail = pvt->pcm_header = pcm;
-    } else {
-        pvt->pcm_tail->_next = pcm;
-        pvt->pcm_tail = pcm;
-    }
+    auto slice = (raw_pcm_t*)malloc(sizeof(raw_pcm_t) + frame.datalen);
+    slice->_next = nullptr;
+    slice->_from_answered = switch_micro_time_now() - times->answered;
+    slice->_rawlen = frame.datalen;
+    memcpy(slice->_rawdata, frame.data, slice->_rawlen);
+    append_raw_pcm(pvt->_track, slice);
 }
 
 static void handleABCTypeRead(switch_media_bug_t *bug, switch_da_t *pvt, switch_channel_t *channel) {
@@ -626,15 +638,15 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     return SWITCH_TRUE;
 }
 
-void save_pcm_to(switch_da_t *pvt, const char *filename) {
+void save_pcm_to(pcm_track_t *track, const char *filename) {
     FILE *output = fopen(filename, "wb");
     if (!output) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
         return;
     }
-    fwrite(&(pvt->_pcm_hdr), sizeof(pcm_hdr_t), 1, output);
+    fwrite(&(track->_hdr), sizeof(pcm_hdr_t), 1, output);
 
-    raw_pcm_t *current = pvt->pcm_header;
+    raw_pcm_t *current = track->_header;
     while (current) {
         fwrite(&(current->_from_answered), PCM_PAYLOAD_LEN + current->_rawlen, 1, output);
         current = current->_next;
@@ -642,58 +654,59 @@ void save_pcm_to(switch_da_t *pvt, const char *filename) {
     fclose(output);
 }
 
-void load_pcm_from(switch_da_t *pvt, const char *filename) {
+pcm_track_t *load_pcm_from(const char *filename) {
     FILE *input = fopen(filename, "rb");
     if (!input) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
-        return;
+        return nullptr;
     }
-    if (fread(&(pvt->_pcm_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
+
+    auto *track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
+    if (fread(&(track->_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
+        free(track);
+        fclose(input);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_hdr_t failed\n");
-    } else {
-        int idx = 0;
-        while (!feof(input)) {
-            raw_pcm_t fixed;
-            if (fread(&(fixed._from_answered), PCM_PAYLOAD_LEN, 1, input) <= 0) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read raw_pcm_t fixed failed\n");
+        return nullptr;
+    }
+
+    int idx = 0;
+    while (!feof(input)) {
+        raw_pcm_t fixed;
+        if (fread(&(fixed._from_answered), PCM_PAYLOAD_LEN, 1, input) <= 0) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read raw_pcm_t fixed failed\n");
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read raw_pcm_t fixed, _rawlen: %d\n",
+                              idx++, fixed._rawlen);
+            auto slice = (raw_pcm_t *) malloc(sizeof(raw_pcm_t) + fixed._rawlen);
+            slice->_next = nullptr;
+            slice->_from_answered = fixed._from_answered;
+            slice->_rawlen = fixed._rawlen;
+            if (fread(slice->_rawdata, fixed._rawlen, 1, input) <= 0) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read _rawdata(%d) failed\n",
+                                  fixed._rawlen);
             } else {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read raw_pcm_t fixed, _rawlen: %d\n",
-                                  idx++, fixed._rawlen);
-                auto pcm = (raw_pcm_t *) malloc(sizeof(raw_pcm_t) + fixed._rawlen);
-                pcm->_next = nullptr;
-                pcm->_from_answered = fixed._from_answered;
-                pcm->_rawlen = fixed._rawlen;
-                if (fread(pcm->_rawdata, fixed._rawlen, 1, input) <= 0) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read _rawdata(%d) failed\n",
-                                      fixed._rawlen);
-                } else {
-                    if (!pvt->pcm_header) {
-                        pvt->pcm_tail = pvt->pcm_header = pcm;
-                    } else {
-                        pvt->pcm_tail->_next = pcm;
-                        pvt->pcm_tail = pcm;
-                    }
-                }
+                append_raw_pcm(track, slice);
             }
         }
     }
 
     fclose(input);
+    return track;
 }
 
-void release_pcm(switch_da_t *pvt) {
-    raw_pcm_t *pcm = pvt->pcm_header;
+void release_pcm(pcm_track_t *track) {
+    raw_pcm_t *pcm = track->_header;
     while (pcm) {
         raw_pcm_t *pcm_next = pcm->_next;
         free(pcm);
         pcm = pcm_next;
     }
-    pvt->pcm_header = pvt->pcm_tail = nullptr;
+    track->_header = track->_tail = nullptr;
 }
 
-int count_pcm(switch_da_t *pvt) {
+int count_pcm(pcm_track_t *track) {
     int count = 0;
-    raw_pcm_t *pcm = pvt->pcm_header;
+    raw_pcm_t *pcm = track->_header;
     while (pcm) {
         count++;
         pcm = pcm->_next;
@@ -710,7 +723,7 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
                       switch_channel_get_name(channel));
 
     switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
-    raw_pcm_t *current = pvt->pcm_header;
+    raw_pcm_t *current = pvt->_track->_header;
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Channel Init:%s\n",
                       switch_channel_get_name(channel));
@@ -809,7 +822,7 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "replay thread ended and hangup for %s\n",
                       switch_channel_get_name(channel));
     // release pcm to avoid save pcm data again
-    release_pcm(pvt);
+    release_pcm(pvt->_track);
     return nullptr;
 }
 
@@ -830,13 +843,13 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
         }
         switch_mutex_destroy(pvt->mutex);
         switch_core_destroy_memory_pool(&pvt->pool);
-        if (pvt->pcm_header) {
+        if (pvt->_track) {
             // try to save pcms
             if (pvt->savepcm) {
-                save_pcm_to(pvt, pvt->savepcm);
+                save_pcm_to(pvt->_track, pvt->savepcm);
             }
             // then destroy pcms
-            release_pcm(pvt);
+            release_pcm(pvt->_track);
         }
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
                           "%s on_destroy: switch_mutex_destroy & switch_core_destroy_memory_pool\n",
@@ -888,7 +901,67 @@ switch_state_handler_table_t asr_cs_handlers = {
 
 #define MAX_API_ARGC 5
 
-// uuid_replay_aliasr <uuid> appkey=<appkey> nls=<nlsurl> loadpcm=<local path> debug=<true/false>
+// load_pcm_aliasr track_id file=<local path>
+SWITCH_STANDARD_API(load_pcm_aliasr_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "load_pcm_aliasr: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    pcm_track_t *track = nullptr;
+    switch_status_t status = SWITCH_STATUS_SUCCESS;
+    char *_file = nullptr;
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *mycmd = switch_core_strdup(pool, cmd);
+
+    char *argv[MAX_API_ARGC];
+    memset(argv, 0, sizeof(char *) * MAX_API_ARGC);
+
+    int argc = switch_split(mycmd, ' ', argv);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
+
+    if (argc < 1) {
+        stream->write_function(stream, "track_id is required.\n");
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+    }
+
+    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
+        if (argv[idx]) {
+            char *ss[2] = {0, 0};
+            int cnt = switch_split(argv[idx], '=', ss);
+            if (cnt == 2) {
+                char *var = ss[0];
+                char *val = ss[1];
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "process arg: %s = %s\n", var, val);
+                if (!strcasecmp(var, "file")) {
+                    _file = val;
+                    continue;
+                }
+            }
+        }
+    }
+
+    if (!_file) {
+        stream->write_function(stream, "file are required.\n");
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+    }
+
+    track = load_pcm_from(_file);
+    if (track) {
+        g_pcm_tracks.insert(std::pair<std::string, pcm_track_t*>(argv[0], track));
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "load %s to %s success\n", _file, argv[0]);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "load %s to %s failed\n", _file, argv[0]);
+    }
+
+    end:
+    switch_core_destroy_memory_pool(&pool);
+    return status;
+}
+
+// uuid_replay_aliasr <uuid> appkey=<appkey> nls=<nlsurl> trackid=<track id> debug=<true/false>
 SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
     if (zstr(cmd)) {
         stream->write_function(stream, "uuid_replay_aliasr: parameter missing.\n");
@@ -900,7 +973,7 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
     char *_appkey = nullptr;
     char *_nlsurl = nullptr;
     char *_asr_dec_vol = nullptr;
-    char *_loadpcm = nullptr;
+    char *_trackid = nullptr;
 //    bool        _debug = false;
 
     switch_memory_pool_t *pool;
@@ -944,16 +1017,16 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
                     _asr_dec_vol = val;
                     continue;
                 }
-                if (!strcasecmp(var, "loadpcm")) {
-                    _loadpcm = val;
+                if (!strcasecmp(var, "trackid")) {
+                    _trackid = val;
                     continue;
                 }
             }
         }
     }
 
-    if (!_appkey || !_nlsurl || !_loadpcm) {
-        stream->write_function(stream, "appkey/nls/loadpcm are required.\n");
+    if (!_appkey || !_nlsurl || !_trackid) {
+        stream->write_function(stream, "appkey/nls/trackid are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
@@ -996,13 +1069,18 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook cs state change failed!\n");
         }
 
-        load_pcm_from(pvt, _loadpcm);
+        pvt->_track = g_pcm_tracks.at(_trackid);
+        if (!pvt->_track) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "replay to aliasr failed, can't found track by %s\n",
+                              _trackid);
+            switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+        }
 
-        if (pvt->_pcm_hdr._actual_samples_per_second != SAMPLE_RATE) {
+        if (pvt->_track->_hdr._actual_samples_per_second != SAMPLE_RATE) {
             if (switch_resample_create(&pvt->resampler,
-                                       pvt->_pcm_hdr._actual_samples_per_second,
+                                       pvt->_track->_hdr._actual_samples_per_second,
                                        SAMPLE_RATE,
-                                       8 * (pvt->_pcm_hdr._microseconds_per_packet / 1000) * 2,
+                                       8 * (pvt->_track->_hdr._microseconds_per_packet / 1000) * 2,
                                        SWITCH_RESAMPLE_QUALITY,
                                        1) != SWITCH_STATUS_SUCCESS) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
@@ -1028,12 +1106,10 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
     return status;
 }
 
-static void init_pcm_hdr(switch_core_session_t *session, pcm_hdr_t *hdr) {
-    switch_codec_implementation_t read_impl;
-    memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
-    switch_core_session_get_read_impl(session, &read_impl);
-    hdr->_actual_samples_per_second = read_impl.actual_samples_per_second;
-    hdr->_microseconds_per_packet = read_impl.microseconds_per_packet;
+static void init_pcm_track(switch_codec_implementation_t read_impl, switch_da_t *pvt) {
+    pvt->_track = (pcm_track_t*)malloc(sizeof(pcm_track_t));
+    pvt->_track->_hdr._actual_samples_per_second = read_impl.actual_samples_per_second;
+    pvt->_track->_hdr._microseconds_per_packet = read_impl.microseconds_per_packet;
 }
 
 // uuid_start_aliasr <uuid> appkey=<appkey> nls=<nlsurl> debug=<true/false> savepcm=<local path>
@@ -1138,18 +1214,24 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         }
         switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
 
-        init_pcm_hdr(ses, &pvt->_pcm_hdr);
+        switch_codec_implementation_t read_impl;
+        memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
+        switch_core_session_get_read_impl(session, &read_impl);
 
-        if (pvt->_pcm_hdr._actual_samples_per_second != SAMPLE_RATE) {
+        if (read_impl.actual_samples_per_second != SAMPLE_RATE) {
             if (switch_resample_create(&pvt->resampler,
-                                       pvt->_pcm_hdr._actual_samples_per_second,
+                                       read_impl.actual_samples_per_second,
                                        SAMPLE_RATE,
-                                       8 * (pvt->_pcm_hdr._microseconds_per_packet / 1000) * 2,
+                                       8 * (read_impl.microseconds_per_packet / 1000) * 2,
                                        SWITCH_RESAMPLE_QUALITY,
                                        1) != SWITCH_STATUS_SUCCESS) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
                 switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
             }
+        }
+
+        if (pvt->savepcm) {
+            init_pcm_track(read_impl, pvt);
         }
 
         //session添加media bug
@@ -1252,6 +1334,12 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
 
     // register API
+
+    SWITCH_ADD_API(api_interface,
+                   "load_pcm_aliasr",
+                   "load_pcm_aliasr api",
+                   load_pcm_aliasr_function,
+                   "<cmd><args>");
 
     SWITCH_ADD_API(api_interface,
                    "uuid_replay_aliasr",
