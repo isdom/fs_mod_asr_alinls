@@ -662,6 +662,8 @@ pcm_track_t *load_pcm_from(const char *filename) {
     }
 
     auto *track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to pcm hdr\n");
     if (fread(&(track->_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
         free(track);
         fclose(input);
