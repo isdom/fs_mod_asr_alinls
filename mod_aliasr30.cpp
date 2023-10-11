@@ -638,6 +638,17 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     return SWITCH_TRUE;
 }
 
+void release_pcm(pcm_track_t *track) {
+    raw_pcm_t *slice = track->_header;
+    while (slice) {
+        raw_pcm_t *pcm_next = slice->_next;
+        free(slice);
+        slice = pcm_next;
+    }
+    track->_header = track->_tail = nullptr;
+    free(track);
+}
+
 void save_pcm_to(pcm_track_t *track, const char *filename) {
     FILE *output = fopen(filename, "wb");
     if (!output) {
@@ -662,8 +673,13 @@ pcm_track_t *load_pcm_from(const char *filename) {
     }
 
     auto *track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
+    if (!track) {
+        fclose(input);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc pcm_track_t failed, OOM\n");
+        return nullptr;
+    }
 
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to pcm hdr\n");
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read pcm hdr: %d\n", sizeof(pcm_hdr_t));
     if (fread(&(track->_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
         free(track);
         fclose(input);
@@ -680,6 +696,12 @@ pcm_track_t *load_pcm_from(const char *filename) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read raw_pcm_t fixed, _rawlen: %d\n",
                               idx++, fixed._rawlen);
             auto slice = (raw_pcm_t *) malloc(sizeof(raw_pcm_t) + fixed._rawlen);
+            if (!slice) {
+                release_pcm(track);
+                fclose(input);
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc sizeof(raw_pcm_t) + fixed._rawlen = (%d) failed, OOM\n", sizeof(raw_pcm_t) + fixed._rawlen);
+                return nullptr;
+            }
             slice->_next = nullptr;
             slice->_from_answered = fixed._from_answered;
             slice->_rawlen = fixed._rawlen;
@@ -694,16 +716,6 @@ pcm_track_t *load_pcm_from(const char *filename) {
 
     fclose(input);
     return track;
-}
-
-void release_pcm(pcm_track_t *track) {
-    raw_pcm_t *pcm = track->_header;
-    while (pcm) {
-        raw_pcm_t *pcm_next = pcm->_next;
-        free(pcm);
-        pcm = pcm_next;
-    }
-    track->_header = track->_tail = nullptr;
 }
 
 int count_pcm(pcm_track_t *track) {
@@ -824,7 +836,7 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "replay thread ended and hangup for %s\n",
                       switch_channel_get_name(channel));
     // release pcm to avoid save pcm data again
-    release_pcm(pvt->_track);
+//    release_pcm(pvt->_track);
     return nullptr;
 }
 
@@ -845,11 +857,8 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
         }
         switch_mutex_destroy(pvt->mutex);
         switch_core_destroy_memory_pool(&pvt->pool);
-        if (pvt->_track) {
-            // try to save pcms
-            if (pvt->savepcm) {
-                save_pcm_to(pvt->_track, pvt->savepcm);
-            }
+        if (pvt->savepcm && pvt->_track) {
+            save_pcm_to(pvt->_track, pvt->savepcm);
             // then destroy pcms
             release_pcm(pvt->_track);
         }
