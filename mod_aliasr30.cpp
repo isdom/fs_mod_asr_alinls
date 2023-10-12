@@ -665,56 +665,77 @@ void save_pcm_to(pcm_track_t *track, const char *filename) {
     fclose(output);
 }
 
-pcm_track_t *load_pcm_from(const char *filename) {
-    FILE *input = fopen(filename, "rb");
-    if (!input) {
+pcm_track_t *load_pcm_from(const char *filename, switch_memory_pool_t *pool) {
+
+    switch_file_t *fd = nullptr;
+    // https://docs.freeswitch.org/group__switch__file__io.html#gadf1475cbe4018c354a487baa5b037809
+    if (switch_file_open(&fd, filename, SWITCH_FOPEN_READ | SWITCH_FOPEN_BINARY, SWITCH_FPROT_UREAD, pool)
+        != SWITCH_STATUS_SUCCESS) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
         return nullptr;
     }
+//    FILE *input = fopen(filename, "rb");
+//    if (!input) {
+//        return nullptr;
+//    }
 
     auto *track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
     if (!track) {
-        fclose(input);
+//        fclose(input);
+        switch_file_close(fd);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc pcm_track_t failed, OOM\n");
         return nullptr;
     }
 
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read pcm hdr: %d\n", sizeof(pcm_hdr_t));
-    if (fread(&(track->_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
+    switch_size_t size;
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read pcm hdr: %ld\n", sizeof(pcm_hdr_t));
+//    if (fread(&(track->_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
+    size = sizeof(pcm_hdr_t);
+    if (switch_file_read(fd, &(track->_hdr), &size) != SWITCH_STATUS_SUCCESS) {
         free(track);
-        fclose(input);
+        // fclose(input);
+        switch_file_close(fd);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_hdr_t failed\n");
         return nullptr;
     }
 
     int idx = 0;
-    while (!feof(input)) {
+//    while (!feof(input)) {
+    while (true) {
         raw_pcm_t fixed;
-        if (fread(&(fixed._from_answered), PCM_PAYLOAD_LEN, 1, input) <= 0) {
+        size = PCM_PAYLOAD_LEN;
+        if (switch_file_read(fd, &(fixed._from_answered), &size) != SWITCH_STATUS_SUCCESS) {
+//        if (fread(&(fixed._from_answered), PCM_PAYLOAD_LEN, 1, input) <= 0) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read raw_pcm_t fixed failed\n");
+            break;
         } else {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read raw_pcm_t fixed, _rawlen: %d\n",
                               idx++, fixed._rawlen);
             auto slice = (raw_pcm_t *) malloc(sizeof(raw_pcm_t) + fixed._rawlen);
             if (!slice) {
                 release_pcm(track);
-                fclose(input);
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc sizeof(raw_pcm_t) + fixed._rawlen = (%d) failed, OOM\n", sizeof(raw_pcm_t) + fixed._rawlen);
+//                fclose(input);
+                switch_file_close(fd);
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc sizeof(raw_pcm_t) + fixed._rawlen = (%ld) failed, OOM\n", sizeof(raw_pcm_t) + fixed._rawlen);
                 return nullptr;
             }
             slice->_next = nullptr;
             slice->_from_answered = fixed._from_answered;
             slice->_rawlen = fixed._rawlen;
-            if (fread(slice->_rawdata, fixed._rawlen, 1, input) <= 0) {
+            size = slice->_rawlen;
+            if (switch_file_read(fd, slice->_rawdata, &size) != SWITCH_STATUS_SUCCESS) {
+//            if (fread(slice->_rawdata, fixed._rawlen, 1, input) <= 0) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read _rawdata(%d) failed\n",
-                                  fixed._rawlen);
+                                  slice->_rawlen);
+                break;
             } else {
                 append_raw_pcm(track, slice);
             }
         }
     }
 
-    fclose(input);
+//    fclose(input);
+    switch_file_close(fd);
     return track;
 }
 
@@ -959,7 +980,7 @@ SWITCH_STANDARD_API(load_pcm_aliasr_function) {
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
-    track = load_pcm_from(_file);
+    track = load_pcm_from(_file, pool);
     if (track) {
         g_pcm_tracks.insert(std::pair<std::string, pcm_track_t*>(argv[0], track));
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "load %s to %s success\n", _file, argv[0]);
