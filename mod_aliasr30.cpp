@@ -679,7 +679,8 @@ pcm_track_t *load_pcm_from(const char *filename, switch_memory_pool_t *pool) {
 //        return nullptr;
 //    }
 
-    auto *track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
+//    auto *track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
+    auto *track = (pcm_track_t*) switch_core_permanent_alloc(sizeof(pcm_track_t));
     if (!track) {
 //        fclose(input);
         switch_file_close(fd);
@@ -692,7 +693,7 @@ pcm_track_t *load_pcm_from(const char *filename, switch_memory_pool_t *pool) {
 //    if (fread(&(track->_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
     size = sizeof(pcm_hdr_t);
     if (switch_file_read(fd, &(track->_hdr), &size) != SWITCH_STATUS_SUCCESS) {
-        free(track);
+//        free(track);
         // fclose(input);
         switch_file_close(fd);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_hdr_t failed\n");
@@ -711,9 +712,10 @@ pcm_track_t *load_pcm_from(const char *filename, switch_memory_pool_t *pool) {
         } else {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read raw_pcm_t fixed, _rawlen: %d\n",
                               idx++, fixed._rawlen);
-            auto slice = (raw_pcm_t *) malloc(sizeof(raw_pcm_t) + fixed._rawlen);
+//            auto slice = (raw_pcm_t *) malloc(sizeof(raw_pcm_t) + fixed._rawlen);
+            auto *slice = (raw_pcm_t*) switch_core_permanent_alloc(sizeof(raw_pcm_t) + fixed._rawlen);
             if (!slice) {
-                release_pcm(track);
+//                release_pcm(track);
 //                fclose(input);
                 switch_file_close(fd);
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc sizeof(raw_pcm_t) + fixed._rawlen = (%ld) failed, OOM\n", sizeof(raw_pcm_t) + fixed._rawlen);
