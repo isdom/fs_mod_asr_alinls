@@ -665,47 +665,69 @@ void save_pcm_to(pcm_track_t *track, const char *filename) {
     fclose(output);
 }
 
+#define USING_FS_FILE 1
+
 pcm_track_t *load_pcm_from(const char *filename, switch_memory_pool_t *pool) {
-//    switch_file_t *fd = nullptr;
-//    // https://docs.freeswitch.org/group__switch__file__io.html#gadf1475cbe4018c354a487baa5b037809
-//    if (switch_file_open(&fd, filename, SWITCH_FOPEN_READ | SWITCH_FOPEN_BINARY, SWITCH_FPROT_UREAD, pool)
-//        != SWITCH_STATUS_SUCCESS) {
-//        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
-//        return nullptr;
-//    }
+#if     USING_FS_FILE
+    switch_file_t *fd = nullptr;
+    // https://docs.freeswitch.org/group__switch__file__io.html#gadf1475cbe4018c354a487baa5b037809
+    if (switch_file_open(&fd, filename, SWITCH_FOPEN_READ | SWITCH_FOPEN_BINARY, SWITCH_FPROT_UREAD, pool)
+        != SWITCH_STATUS_SUCCESS) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to fopen %s\n", filename);
+        return nullptr;
+    }
+#else
     FILE *input = fopen(filename, "rb");
     if (!input) {
         return nullptr;
     }
+#endif
 
 //    auto *track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
     auto *track = (pcm_track_t*) switch_core_permanent_alloc(sizeof(pcm_track_t));
     if (!track) {
+#if     USING_FS_FILE
+        switch_file_close(fd);
+#else
         fclose(input);
-//        switch_file_close(fd);
+#endif
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc pcm_track_t failed, OOM\n");
         return nullptr;
     }
 
-//    switch_size_t size;
+#if     USING_FS_FILE
+    switch_size_t size;
+#endif
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read pcm hdr: %ld\n", sizeof(pcm_hdr_t));
+#if     USING_FS_FILE
+    size = sizeof(pcm_hdr_t);
+    if (switch_file_read(fd, &(track->_hdr), &size) != SWITCH_STATUS_SUCCESS) {
+#else
     if (fread(&(track->_hdr), sizeof(pcm_hdr_t), 1, input) <= 0) {
-//    size = sizeof(pcm_hdr_t);
-//    if (switch_file_read(fd, &(track->_hdr), &size) != SWITCH_STATUS_SUCCESS) {
+#endif
 //        free(track);
+#if     USING_FS_FILE
+        switch_file_close(fd);
+#else
         fclose(input);
-//        switch_file_close(fd);
+#endif
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_hdr_t failed\n");
         return nullptr;
     }
 
     int idx = 0;
+#if     USING_FS_FILE
+    while (true) {
+#else
     while (!feof(input)) {
-//    while (true) {
+#endif
         raw_pcm_t fixed;
-//        size = PCM_PAYLOAD_LEN;
-//        if (switch_file_read(fd, &(fixed._from_answered), &size) != SWITCH_STATUS_SUCCESS) {
+#if     USING_FS_FILE
+        size = PCM_PAYLOAD_LEN;
+        if (switch_file_read(fd, &(fixed._from_answered), &size) != SWITCH_STATUS_SUCCESS) {
+#else
         if (fread(&(fixed._from_answered), PCM_PAYLOAD_LEN, 1, input) <= 0) {
+#endif
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read raw_pcm_t fixed failed\n");
             break;
         } else {
@@ -715,17 +737,23 @@ pcm_track_t *load_pcm_from(const char *filename, switch_memory_pool_t *pool) {
             auto *slice = (raw_pcm_t*) switch_core_permanent_alloc(sizeof(raw_pcm_t) + fixed._rawlen);
             if (!slice) {
 //                release_pcm(track);
+#if     USING_FS_FILE
+                switch_file_close(fd);
+#else
                 fclose(input);
-//                switch_file_close(fd);
+#endif
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc sizeof(raw_pcm_t) + fixed._rawlen = (%ld) failed, OOM\n", sizeof(raw_pcm_t) + fixed._rawlen);
                 return nullptr;
             }
             slice->_next = nullptr;
             slice->_from_answered = fixed._from_answered;
             slice->_rawlen = fixed._rawlen;
-//            size = slice->_rawlen;
-//            if (switch_file_read(fd, slice->_rawdata, &size) != SWITCH_STATUS_SUCCESS) {
+#if     USING_FS_FILE
+            size = slice->_rawlen;
+            if (switch_file_read(fd, slice->_rawdata, &size) != SWITCH_STATUS_SUCCESS) {
+#else
             if (fread(slice->_rawdata, fixed._rawlen, 1, input) <= 0) {
+#endif
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read _rawdata(%d) failed\n",
                                   slice->_rawlen);
                 break;
@@ -735,8 +763,11 @@ pcm_track_t *load_pcm_from(const char *filename, switch_memory_pool_t *pool) {
         }
     }
 
+#if     USING_FS_FILE
+    switch_file_close(fd);
+#else
     fclose(input);
-//    switch_file_close(fd);
+#endif
     return track;
 }
 
