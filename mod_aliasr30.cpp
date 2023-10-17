@@ -1029,6 +1029,11 @@ SWITCH_STANDARD_API(load_pcm_aliasr_function) {
 
     track = load_track_from(_file, pool);
     if (track) {
+        auto old = g_pcm_tracks.at(argv[0]);
+        if (old) {
+            release_track(old);
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "has been load track associate with %s，release old track\n", argv[0]);
+        }
         g_pcm_tracks.insert(std::pair<std::string, pcm_track_t*>(argv[0], track));
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "load %s to %s success\n", _file, argv[0]);
     } else {
