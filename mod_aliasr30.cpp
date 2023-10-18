@@ -55,7 +55,8 @@ typedef struct {
     raw_pcm_t *_tail;
 } pcm_track_t;
 
-std::map<std::string, pcm_track_t*> g_pcm_tracks;
+typedef std::map<std::string, pcm_track_t*> id2track_t;
+id2track_t g_pcm_tracks;
 
 typedef struct switch_da {
     switch_core_session_t *session = nullptr;
@@ -1029,13 +1030,19 @@ SWITCH_STANDARD_API(load_pcm_aliasr_function) {
 
     track = load_track_from(_file, pool);
     if (track) {
-        auto old = g_pcm_tracks.at(argv[0]);
-        if (old) {
-            release_track(old);
+        auto iter = g_pcm_tracks.find(argv[0]);
+
+        if(iter != g_pcm_tracks.end()) {
+            g_pcm_tracks.erase(iter);
+            release_track(iter->second);
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "has been load track associate with %s，release old track\n", argv[0]);
         }
-        g_pcm_tracks.insert(std::pair<std::string, pcm_track_t*>(argv[0], track));
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "load %s to %s success\n", _file, argv[0]);
+        auto result = g_pcm_tracks.insert(std::pair<std::string, pcm_track_t*>(argv[0], track));
+        if (result.second) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "load %s to %s success\n", _file, argv[0]);
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "load %s to %s meet some error\n", _file, argv[0]);
+        }
     } else {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "load %s to %s failed\n", _file, argv[0]);
     }
@@ -1153,11 +1160,14 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook cs state change failed!\n");
         }
 
-        pvt->_track = g_pcm_tracks.at(_trackid);
-        if (!pvt->_track) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "replay to aliasr failed, can't found track by %s\n",
-                              _trackid);
-            switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+        {
+            auto iter = g_pcm_tracks.find(argv[0]);
+            if (iter == g_pcm_tracks.end() || !iter->second) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "replay to aliasr failed, can't found track by %s\n",
+                                  _trackid);
+                switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+            }
+            pvt->_track = iter->second;
         }
 
         if (pvt->_track->_hdr._actual_samples_per_second != SAMPLE_RATE) {
