@@ -1206,6 +1206,7 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
 
 static void init_pcm_track(const switch_codec_implementation_t &read_impl, switch_da_t *pvt) {
     pvt->_track = (pcm_track_t*)malloc(sizeof(pcm_track_t));
+    memset(pvt->_track, 0, sizeof(pcm_track_t));
     pvt->_track->_hdr._actual_samples_per_second = read_impl.actual_samples_per_second;
     pvt->_track->_hdr._microseconds_per_packet = read_impl.microseconds_per_packet;
 }
@@ -1306,6 +1307,8 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
             double db = atof(pvt->asr_dec_vol);
             pvt->vol_multiplier = pow(10, db / 20);
         }
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "before create mem_pool:%s\n",
+                          switch_channel_get_name(channel));
         if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
@@ -1332,6 +1335,9 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
             init_pcm_track(read_impl, pvt);
         }
 
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "before switch_core_media_bug_add:%s\n",
+                          switch_channel_get_name(channel));
+
         //session添加media bug
         if ((status = switch_core_media_bug_add(ses, "asr", NULL,
                                                 asr_callback, pvt, 0,
@@ -1343,7 +1349,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         switch_channel_set_private(channel, "asr", pvt);
 
         if (switch_channel_add_state_handler(channel, &asr_cs_handlers) < 0) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook cs state change failed!\n");
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
         } // hook cs state change
 
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_INFO, "%s Start ASR\n",
