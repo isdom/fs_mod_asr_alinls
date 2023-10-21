@@ -1290,6 +1290,8 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting aliasr:%s\n",
                           switch_channel_get_name(channel));
 
+        switch_sleep(1000 * 1000);
+
         switch_da_t *pvt;
         if (!(pvt = (switch_da_t *) switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
@@ -1309,6 +1311,9 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         }
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "before create mem_pool:%s\n",
                           switch_channel_get_name(channel));
+
+        switch_sleep(1000 * 1000);
+
         if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
@@ -1337,6 +1342,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
 
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "before switch_core_media_bug_add:%s\n",
                           switch_channel_get_name(channel));
+        switch_sleep(1000 * 1000);
 
         //session添加media bug
         if ((status = switch_core_media_bug_add(ses, "asr", NULL,
