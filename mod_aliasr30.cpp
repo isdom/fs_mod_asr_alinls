@@ -1290,8 +1290,6 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting aliasr:%s\n",
                           switch_channel_get_name(channel));
 
-        switch_sleep(1000 * 1000);
-
         switch_da_t *pvt;
         if (!(pvt = (switch_da_t *) switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
@@ -1301,18 +1299,14 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         pvt->starting = 0;
         pvt->datalen = 0;
         pvt->session = ses;
-        pvt->appkey = switch_core_session_strdup(ses, _appkey);
-        pvt->nlsurl = switch_core_session_strdup(ses, _nlsurl);
-        pvt->savepcm = _savepcm ? switch_core_session_strdup(ses, _savepcm) : nullptr;
-        pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(ses, _asr_dec_vol) : nullptr;
+        pvt->appkey = switch_core_session_strdup(pvt->session, _appkey);
+        pvt->nlsurl = switch_core_session_strdup(pvt->session, _nlsurl);
+        pvt->savepcm = _savepcm ? switch_core_session_strdup(pvt->session, _savepcm) : nullptr;
+        pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(pvt->session, _asr_dec_vol) : nullptr;
         if (pvt->asr_dec_vol) {
             double db = atof(pvt->asr_dec_vol);
             pvt->vol_multiplier = pow(10, db / 20);
         }
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "before create mem_pool:%s\n",
-                          switch_channel_get_name(channel));
-
-        switch_sleep(1000 * 1000);
 
         if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
@@ -1322,7 +1316,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
 
         switch_codec_implementation_t read_impl;
         memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
-        switch_core_session_get_read_impl(session, &read_impl);
+        switch_core_session_get_read_impl(pvt->session, &read_impl);
 
         if (read_impl.actual_samples_per_second != SAMPLE_RATE) {
             if (switch_resample_create(&pvt->resampler,
@@ -1339,10 +1333,6 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         if (pvt->savepcm) {
             init_pcm_track(read_impl, pvt);
         }
-
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "before switch_core_media_bug_add:%s\n",
-                          switch_channel_get_name(channel));
-        switch_sleep(1000 * 1000);
 
         //session添加media bug
         if ((status = switch_core_media_bug_add(ses, "asr", NULL,
