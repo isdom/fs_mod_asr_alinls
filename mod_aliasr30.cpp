@@ -657,7 +657,7 @@ uint32_t calc_track_body_bytes(pcm_track_t *track) {
     uint32_t body_bytes = 0;
     pcm_slice_t *slice = track->header;
     while (slice) {
-        body_bytes += slice->_raw_len;
+        body_bytes += SLICE_FIXED_LEN + slice->_raw_len;
         slice = slice->_next;
     }
     return body_bytes;
