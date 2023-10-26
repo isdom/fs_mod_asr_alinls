@@ -680,29 +680,33 @@ void save_track_to(pcm_track_t *track, const char *filename) {
     fclose(output);
 }
 
-#define USING_FS_FILE 0
-#define USING_MALLOC 1
-
-pcm_track_t *load_track_from(const char *filename, switch_memory_pool_t *pool) {
+pcm_track_t *load_track_from(const char *filename) {
     FILE *input = fopen(filename, "rb");
     if (!input) {
         return nullptr;
     }
 
     auto track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
-    memset(track, 0, sizeof(pcm_track_t));
-
     if (!track) {
         fclose(input);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc pcm_track_t failed, OOM\n");
         return nullptr;
     }
+    memset(track, 0, sizeof(pcm_track_t));
 
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read pcm hdr: %ld\n", sizeof(pcm_sample_t));
-    if (fread(track->version, sizeof(pcm_sample_t), 1, input) <= 0) {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read track fixed part: %d\n", SLICE_FIXED_LEN);
+    if (fread(track, SLICE_FIXED_LEN, 1, input) <= 0) {
         free(track);
         fclose(input);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_sample_t failed\n");
+        return nullptr;
+    }
+    // check version: PCM1
+    if (memcmp(track->version, PCM_VERSION, sizeof(PCM_VERSION)) != 0) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "track file has unsupport version: %c%c%c%c, Abort loading!\n",
+                          track->version[0], track->version[1], track->version[2], track->version[3]);
+        free(track);
+        fclose(input);
         return nullptr;
     }
 
@@ -716,13 +720,13 @@ pcm_track_t *load_track_from(const char *filename, switch_memory_pool_t *pool) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read pcm_slice_t fixed, _raw_len: %d\n",
                               idx++, fixed._raw_len);
             auto slice = (pcm_slice_t *) malloc(sizeof(pcm_slice_t) + fixed._raw_len);
-            memset(slice, 0, sizeof(pcm_slice_t) + fixed._raw_len);
             if (!slice) {
                 release_track(track);
                 fclose(input);
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc sizeof(pcm_slice_t) + fixed._raw_len = (%ld) failed, OOM\n", sizeof(pcm_slice_t) + fixed._raw_len);
                 return nullptr;
             }
+            memset(slice, 0, sizeof(pcm_slice_t) + fixed._raw_len);
             slice->_next = nullptr;
             slice->_from_answered = fixed._from_answered;
             slice->_raw_len = fixed._raw_len;
@@ -734,6 +738,13 @@ pcm_track_t *load_track_from(const char *filename, switch_memory_pool_t *pool) {
                 append_raw_pcm(track, slice);
             }
         }
+    }
+
+    // check body size
+    uint32_t calculated_body_bytes = calc_track_body_bytes(track);
+    if (track->body_bytes != calculated_body_bytes) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "mismatched body_bytes, %d(record in file) != %d(calculated)\n",
+                          track->body_bytes, calculated_body_bytes);
     }
 
     fclose(input);
@@ -986,7 +997,7 @@ SWITCH_STANDARD_API(load_pcm_aliasr_function) {
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
-    track = load_track_from(_file, pool);
+    track = load_track_from(_file);
     if (track) {
         auto iter = g_pcm_tracks.find(argv[0]);
 
