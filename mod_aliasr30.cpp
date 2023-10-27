@@ -948,6 +948,11 @@ switch_state_handler_table_t asr_cs_handlers = {
         0
 };
 
+SWITCH_STANDARD_API(dump_compile_function) {
+    stream->write_function(stream, "sizeof(pcm_track_t): %d, TRACK_FIXED_LEN:%d.\n", sizeof(pcm_track_t), TRACK_FIXED_LEN);
+    return SWITCH_STATUS_SUCCESS;
+}
+
 #define MAX_API_ARGC 5
 
 // load_pcm_aliasr track_id file=<local path>
@@ -1403,6 +1408,11 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
 
     // register API
+    SWITCH_ADD_API(api_interface,
+                   "dump_compile",
+                   "dump_compile api",
+                   dump_compile_function,
+                   "<cmd><args>");
 
     SWITCH_ADD_API(api_interface,
                    "load_pcm_aliasr",
