@@ -53,8 +53,8 @@ const uint8_t PCM_VERSION[4] = {'P', 'C', 'M', '1'};
 typedef struct {
     uint8_t version[4];
     uint32_t body_bytes;
-    uint32_t is_recv_bye;
     pcm_sample_t sample;
+    uint32_t is_recv_bye;
     pcm_slice_t *header;
     pcm_slice_t *tail;
 } pcm_track_t;
@@ -694,8 +694,8 @@ pcm_track_t *load_track_from(const char *filename) {
     }
     memset(track, 0, sizeof(pcm_track_t));
 
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read track fixed part: %d\n", SLICE_FIXED_LEN);
-    if (fread(track, SLICE_FIXED_LEN, 1, input) <= 0) {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read track fixed part: %d\n", TRACK_FIXED_LEN);
+    if (fread(track, TRACK_FIXED_LEN, 1, input) <= 0) {
         free(track);
         fclose(input);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_sample_t failed\n");
