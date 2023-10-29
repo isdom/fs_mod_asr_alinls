@@ -34,6 +34,8 @@ typedef struct  {
 
 //======================================== ali asr start ===============
 
+#pragma pack(push, 1)
+
 typedef struct {
     uint32_t actual_samples_per_second;
     int microseconds_per_packet;
@@ -58,6 +60,8 @@ typedef struct {
     pcm_slice_t *header;
     pcm_slice_t *tail;
 } pcm_track_t;
+
+#pragma pack(pop)
 
 const static int TRACK_FIXED_LEN = _OFFSET_OF(pcm_track_t, header) - _OFFSET_OF(pcm_track_t, version);
 
