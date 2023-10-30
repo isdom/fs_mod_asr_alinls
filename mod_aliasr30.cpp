@@ -1141,7 +1141,7 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
         }
 
         {
-            auto iter = g_pcm_tracks.find(argv[0]);
+            auto iter = g_pcm_tracks.find(_trackid);
             if (iter == g_pcm_tracks.end() || !iter->second) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "replay to aliasr failed, can't found track by %s\n",
                                   _trackid);
