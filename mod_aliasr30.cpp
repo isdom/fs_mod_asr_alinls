@@ -7,6 +7,8 @@
 #include "nlsCommonSdk/Token.h"
 #include <sys/time.h>
 #include <map>
+#include <oss_c_sdk/oss_api.h>
+#include <oss_c_sdk/aos_http_io.h>
 
 // #include <libks/ks_thread_pool.h>
 
@@ -952,12 +954,147 @@ switch_state_handler_table_t asr_cs_handlers = {
         0
 };
 
-SWITCH_STANDARD_API(dump_compile_function) {
-    stream->write_function(stream, "sizeof(pcm_track_t): %d, TRACK_FIXED_LEN:%d.\n", sizeof(pcm_track_t), TRACK_FIXED_LEN);
-    return SWITCH_STATUS_SUCCESS;
+#define MAX_API_ARGC 10
+
+/* yourEndpoint填写Bucket所在地域对应的Endpoint。以华东1（杭州）为例，Endpoint填写为https://oss-cn-hangzhou.aliyuncs.com。*/
+//const char *endpoint = "yourEndpoint";
+///* 填写Bucket名称，例如examplebucket。*/
+//const char *bucket_name = "examplebucket";
+///* 填写Object完整路径，完整路径中不能包含Bucket名称，例如exampledir/exampleobject.txt。*/
+//const char *object_name = "exampledir/exampleobject.txt";
+const char *object_content = "More than just cloud.";
+void init_options(oss_request_options_t *options, const char *akid, const char *aksecret, const char *endpoint)
+{
+    options->config = oss_config_create(options->pool);
+    /* 用char*类型的字符串初始化aos_string_t类型。*/
+    aos_str_set(&options->config->endpoint, endpoint);
+    /* 从环境变量中获取访问凭证。运行本代码示例之前，请确保已设置环境变量OSS_ACCESS_KEY_ID和OSS_ACCESS_KEY_SECRET。*/
+    aos_str_set(&options->config->access_key_id, akid);
+    aos_str_set(&options->config->access_key_secret, aksecret);
+    /* 是否使用了CNAME。0表示不使用。*/
+    options->config->is_cname = 0;
+    /* 设置网络相关参数，比如超时时间等。*/
+    options->ctl = aos_http_controller_create(options->pool, 0);
 }
 
-#define MAX_API_ARGC 5
+// oss_test1 akid=<akid> aksecret=<aksecret> endpoint=<endpoint> bucket=<bucket_name> object=<object_name> trackid=<trackid>
+SWITCH_STANDARD_API(oss_test1_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "oss_test1: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    /* 用于内存管理的内存池（pool），等价于apr_pool_t。其实现代码在apr库中。*/
+    aos_pool_t *aos_pool;
+    /* 创建并初始化options，该参数包括endpoint、access_key_id、acces_key_secret、is_cname、curl等全局配置信息。*/
+    oss_request_options_t *oss_client_options;
+    /* 初始化参数。*/
+    aos_string_t bucket;
+    aos_string_t object;
+    aos_list_t buffer;
+    aos_buf_t *content = NULL;
+    aos_table_t *headers = NULL;
+    aos_table_t *resp_headers = NULL;
+    aos_status_t *resp_status = NULL;
+
+    switch_status_t status = SWITCH_STATUS_SUCCESS;
+    char *_oss_ak_id = nullptr;
+    char *_oss_ak_secret = nullptr;
+    char *_endpoint = nullptr;
+    char *_bucket = nullptr;
+    char *_object = nullptr;
+    char *_track_id = nullptr;
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *mycmd = switch_core_strdup(pool, cmd);
+
+    char *argv[MAX_API_ARGC];
+    memset(argv, 0, sizeof(char *) * MAX_API_ARGC);
+
+    int argc = switch_split(mycmd, ' ', argv);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
+
+    if (argc < 6) {
+        stream->write_function(stream, "akid/aksecret/endpoint/bucket/object/trackid are required.\n");
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+    }
+
+    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
+        if (argv[idx]) {
+            char *ss[2] = {0, 0};
+            int cnt = switch_split(argv[idx], '=', ss);
+            if (cnt == 2) {
+                char *var = ss[0];
+                char *val = ss[1];
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "process arg: %s = %s\n", var, val);
+                if (!strcasecmp(var, "akid")) {
+                    _oss_ak_id = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "aksecret")) {
+                    _oss_ak_secret = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "endpoint")) {
+                    _endpoint = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "bucket")) {
+                    _bucket = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "object")) {
+                    _object = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "trackid")) {
+                    _track_id = val;
+                    continue;
+                }
+            }
+        }
+    }
+
+    if (!_oss_ak_id || !_oss_ak_secret || !_endpoint || !_bucket || !_object || !_track_id) {
+        stream->write_function(stream, "akid/aksecret/endpoint/bucket/object/trackid are required.\n");
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+    }
+
+    /* 在程序入口调用aos_http_io_initialize方法来初始化网络、内存等全局资源。*/
+    if (aos_http_io_initialize(NULL, 0) != AOSE_OK) {
+        exit(1);
+    }
+
+    /* 重新创建一个内存池，第二个参数是NULL，表示没有继承其它内存池。*/
+    aos_pool_create(&aos_pool, NULL);
+    /* 在内存池中分配内存给options。*/
+    oss_client_options = oss_request_options_create(aos_pool);
+    /* 初始化Client的选项oss_client_options。*/
+    init_options(oss_client_options, _oss_ak_id, _oss_ak_secret, _endpoint);
+
+    aos_str_set(&bucket, _bucket);
+    aos_str_set(&object, _object);
+    aos_list_init(&buffer);
+    content = aos_buf_pack(oss_client_options->pool, object_content, strlen(object_content));
+    aos_list_add_tail(&content->node, &buffer);
+    /* 上传文件。*/
+    resp_status = oss_put_object_from_buffer(oss_client_options, &bucket, &object, &buffer, headers, &resp_headers);
+    /* 判断上传是否成功。*/
+    if (aos_status_is_ok(resp_status)) {
+        printf("put object from buffer succeeded\n");
+    } else {
+        printf("put object from buffer failed\n");
+    }
+    /* 释放内存池，相当于释放了请求过程中各资源分配的内存。*/
+    aos_pool_destroy(aos_pool);
+    /* 释放之前分配的全局资源。*/
+    aos_http_io_deinitialize();
+
+    end:
+    switch_core_destroy_memory_pool(&pool);
+    return status;
+}
 
 // load_pcm_aliasr track_id file=<local path>
 SWITCH_STANDARD_API(load_pcm_aliasr_function) {
@@ -1413,9 +1550,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
 
     // register API
     SWITCH_ADD_API(api_interface,
-                   "dump_compile",
-                   "dump_compile api",
-                   dump_compile_function,
+                   "oss_test1",
+                   "oss_test1 api",
+                   oss_test1_function,
                    "<cmd><args>");
 
     SWITCH_ADD_API(api_interface,
