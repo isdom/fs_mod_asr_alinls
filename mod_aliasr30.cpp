@@ -1020,7 +1020,7 @@ SWITCH_STANDARD_API(oss_test1_function) {
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
-    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
+    for (int idx = 0; idx < MAX_API_ARGC; idx++) {
         if (argv[idx]) {
             char *ss[2] = {0, 0};
             int cnt = switch_split(argv[idx], '=', ss);
