@@ -1082,9 +1082,9 @@ SWITCH_STANDARD_API(oss_test1_function) {
     resp_status = oss_put_object_from_buffer(oss_client_options, &bucket, &object, &buffer, headers, &resp_headers);
     /* 判断上传是否成功。*/
     if (aos_status_is_ok(resp_status)) {
-        printf("put object from buffer succeeded\n");
+        stream->write_function(stream, "put object from buffer succeeded\n");
     } else {
-        printf("put object from buffer failed\n");
+        stream->write_function(stream, "put object from buffer failed\n");
     }
     /* 释放内存池，相当于释放了请求过程中各资源分配的内存。*/
     aos_pool_destroy(aos_pool);
