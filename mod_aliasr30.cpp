@@ -962,7 +962,7 @@ switch_state_handler_table_t asr_cs_handlers = {
 //const char *bucket_name = "examplebucket";
 ///* 填写Object完整路径，完整路径中不能包含Bucket名称，例如exampledir/exampleobject.txt。*/
 //const char *object_name = "exampledir/exampleobject.txt";
-const char *object_content = "More than just cloud.";
+//const char *object_content = "More than just cloud.";
 void init_options(oss_request_options_t *options, const char *akid, const char *aksecret, const char *endpoint)
 {
     options->config = oss_config_create(options->pool);
@@ -992,10 +992,10 @@ SWITCH_STANDARD_API(oss_test1_function) {
     aos_string_t bucket;
     aos_string_t object;
     aos_list_t buffer;
-    aos_buf_t *content = NULL;
     aos_table_t *headers = NULL;
     aos_table_t *resp_headers = NULL;
     aos_status_t *resp_status = NULL;
+    pcm_track_t *track = nullptr;
 
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     char *_oss_ak_id = nullptr;
@@ -1061,6 +1061,16 @@ SWITCH_STANDARD_API(oss_test1_function) {
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
+    {
+        auto iter = g_pcm_tracks.find(_track_id);
+        if (iter == g_pcm_tracks.end() || !iter->second) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "oss_test1 failed, can't found track by %s\n",
+                              _track_id);
+            switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+        }
+        track = iter->second;
+    }
+
     /* 在程序入口调用aos_http_io_initialize方法来初始化网络、内存等全局资源。*/
     if (aos_http_io_initialize(NULL, 0) != AOSE_OK) {
         exit(1);
@@ -1076,8 +1086,18 @@ SWITCH_STANDARD_API(oss_test1_function) {
     aos_str_set(&bucket, _bucket);
     aos_str_set(&object, _object);
     aos_list_init(&buffer);
-    content = aos_buf_pack(oss_client_options->pool, object_content, strlen(object_content));
-    aos_list_add_tail(&content->node, &buffer);
+    {
+        aos_buf_t *content = NULL;
+        content = aos_buf_pack(oss_client_options->pool, track, TRACK_FIXED_LEN);
+        aos_list_add_tail(&content->node, &buffer);
+
+        pcm_slice_t *current = track->header;
+        while (current) {
+            content = aos_buf_pack(oss_client_options->pool, &(current->_from_answered), SLICE_FIXED_LEN + current->_raw_len);
+            aos_list_add_tail(&content->node, &buffer);
+            current = current->_next;
+        }
+    }
     /* 上传文件。*/
     resp_status = oss_put_object_from_buffer(oss_client_options, &bucket, &object, &buffer, headers, &resp_headers);
     /* 判断上传是否成功。*/
