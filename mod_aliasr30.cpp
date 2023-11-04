@@ -1,12 +1,14 @@
 #include <switch.h>
-#include <fstream>
 #include <cmath>
 #include "nlsClient.h"
 #include "nlsEvent.h"
 #include "speechTranscriberRequest.h"
 #include "nlsCommonSdk/Token.h"
-#include <sys/time.h>
-#include <map>
+//#include <fstream>
+//#include <sys/time.h>
+// #include <map>
+//#include <queue>
+
 #include <oss_c_sdk/oss_api.h>
 #include <oss_c_sdk/aos_http_io.h>
 
@@ -46,7 +48,7 @@ typedef struct {
 typedef struct pcm_slice_s {
     struct pcm_slice_s *_next;
     switch_time_t _from_answered;
-    uint32_t _raw_len;
+    int32_t _raw_len;
     uint8_t _raw_data[];
 } pcm_slice_t;
 
@@ -58,9 +60,10 @@ typedef struct {
     uint8_t version[4];
     uint32_t body_bytes;
     pcm_sample_t sample;
-    uint32_t is_recv_bye;
+    uint8_t is_recv_bye;
     pcm_slice_t *header;
     pcm_slice_t *tail;
+    char name[];
 } pcm_track_t;
 
 #pragma pack(pop)
@@ -69,6 +72,12 @@ const static int TRACK_FIXED_LEN = _OFFSET_OF(pcm_track_t, header) - _OFFSET_OF(
 
 typedef std::map<std::string, pcm_track_t*> id2track_t;
 id2track_t g_pcm_tracks;
+
+const uint32_t MAX_TRACK_PENDING_UPLOAD = 1000;
+
+switch_memory_pool_t  *g_mod_pool = nullptr;
+switch_queue_t *g_tracks_to_upload = nullptr;
+switch_thread_t *g_upload_to_oss_thread = nullptr;
 
 typedef struct {
     switch_core_session_t *session;
@@ -669,6 +678,7 @@ uint32_t calc_track_body_bytes(pcm_track_t *track) {
     return body_bytes;
 }
 
+/*
 void save_track_to(pcm_track_t *track, const char *filename) {
     FILE *output = fopen(filename, "wb");
     if (!output) {
@@ -685,6 +695,7 @@ void save_track_to(pcm_track_t *track, const char *filename) {
     }
     fclose(output);
 }
+ */
 
 pcm_track_t *load_track_from(const char *filename) {
     FILE *input = fopen(filename, "rb");
@@ -901,10 +912,25 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
         }
         switch_mutex_destroy(pvt->mutex);
         switch_core_destroy_memory_pool(&pvt->pool);
-        if (pvt->save_pcm && pvt->track) {
-            save_track_to(pvt->track, pvt->save_pcm);
-            // then destroy pcms
-            release_track(pvt->track);
+        if (pvt->track) {
+            // try to upload to oss
+            // save_track_to(pvt->track, pvt->save_pcm);
+            /**
+             * @returns APR_EINTR the blocking operation was interrupted (try again)
+             * @returns APR_EAGAIN the queue is full
+             * @returns APR_EOF the queue has been terminated
+             * @returns APR_SUCCESS on a successfull push
+            */
+
+            pvt->track->body_bytes = calc_track_body_bytes(pvt->track);
+            if (g_upload_to_oss_thread) {
+                if (APR_SUCCESS != switch_queue_trypush(g_tracks_to_upload, pvt->track)) {
+                    // then destroy pcms
+                    release_track(pvt->track);
+                }
+            } else {
+                release_track(pvt->track);
+            }
         }
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
                           "%s on_destroy: switch_mutex_destroy & switch_core_destroy_memory_pool\n",
@@ -954,7 +980,13 @@ switch_state_handler_table_t asr_cs_handlers = {
         0
 };
 
-#define MAX_API_ARGC 10
+typedef struct {
+    const char *oss_ak_id;
+    const char *oss_ak_secret;
+    const char *endpoint;
+    const char *bucket;
+    switch_queue_t *upload_queue;
+} upload_to_oss_t;
 
 /* yourEndpoint填写Bucket所在地域对应的Endpoint。以华东1（杭州）为例，Endpoint填写为https://oss-cn-hangzhou.aliyuncs.com。*/
 //const char *endpoint = "yourEndpoint";
@@ -977,13 +1009,7 @@ void init_options(oss_request_options_t *options, const char *akid, const char *
     options->ctl = aos_http_controller_create(options->pool, 0);
 }
 
-// oss_test1 akid=<akid> aksecret=<aksecret> endpoint=<endpoint> bucket=<bucket_name> object=<object_name> trackid=<trackid>
-SWITCH_STANDARD_API(oss_test1_function) {
-    if (zstr(cmd)) {
-        stream->write_function(stream, "oss_test1: parameter missing.\n");
-        return SWITCH_STATUS_SUCCESS;
-    }
-
+void upload_to_oss(pcm_track_t *track, upload_to_oss_t *uto) {
     /* 用于内存管理的内存池（pool），等价于apr_pool_t。其实现代码在apr库中。*/
     aos_pool_t *aos_pool;
     /* 创建并初始化options，该参数包括endpoint、access_key_id、acces_key_secret、is_cname、curl等全局配置信息。*/
@@ -992,18 +1018,102 @@ SWITCH_STANDARD_API(oss_test1_function) {
     aos_string_t bucket;
     aos_string_t object;
     aos_list_t buffer;
-    aos_table_t *headers = NULL;
-    aos_table_t *resp_headers = NULL;
-    aos_status_t *resp_status = NULL;
-    pcm_track_t *track = nullptr;
+    aos_table_t *headers = nullptr;
+    aos_table_t *resp_headers = nullptr;
+    aos_status_t *resp_status = nullptr;
+
+    /* 重新创建一个内存池，第二个参数是NULL，表示没有继承其它内存池。*/
+    aos_pool_create(&aos_pool, nullptr);
+    /* 在内存池中分配内存给options。*/
+    oss_client_options = oss_request_options_create(aos_pool);
+    /* 初始化Client的选项oss_client_options。*/
+    init_options(oss_client_options, uto->oss_ak_id, uto->oss_ak_secret, uto->endpoint);
+
+    aos_str_set(&bucket, uto->bucket);
+    aos_str_set(&object, track->name);
+    aos_list_init(&buffer);
+    {
+        aos_buf_t *content = nullptr;
+        content = aos_buf_pack(oss_client_options->pool, track, TRACK_FIXED_LEN);
+        aos_list_add_tail(&content->node, &buffer);
+
+        pcm_slice_t *current = track->header;
+        while (current) {
+            content = aos_buf_pack(oss_client_options->pool, &(current->_from_answered), SLICE_FIXED_LEN + current->_raw_len);
+            aos_list_add_tail(&content->node, &buffer);
+            current = current->_next;
+        }
+    }
+    /* 上传文件。*/
+    resp_status = oss_put_object_from_buffer(oss_client_options, &bucket, &object, &buffer, headers, &resp_headers);
+    /* 判断上传是否成功。*/
+    if (aos_status_is_ok(resp_status)) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "put object (%s) from buffer succeeded\n", track->name);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "put object (%s) from buffer failed\n", track->name);
+    }
+    /* 释放内存池，相当于释放了请求过程中各资源分配的内存。*/
+    aos_pool_destroy(aos_pool);
+}
+
+static void *SWITCH_THREAD_FUNC upload_to_oss_thread(switch_thread_t *thread, upload_to_oss_t *uto) {
+
+    pcm_track_t *track_to_upload = nullptr;
+
+    while (true) {
+        const switch_status_t status = switch_queue_pop_timeout(uto->upload_queue,
+                                                                reinterpret_cast<void **>(&track_to_upload),
+                                                                500 * 1000);
+        switch (status) {
+            // the request timed out
+            case APR_TIMEUP:
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: fetch timeout\n");
+                break;
+                //  the blocking was interrupted (try again)
+            case APR_EINTR:
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: fetch interrupted\n");
+                break;
+                // if the queue has been terminated
+            case APR_EOF:
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: terminated\n");
+                goto end;
+                //  on a successfull pop
+            case APR_SUCCESS:
+                if (track_to_upload) {
+                    upload_to_oss(track_to_upload, uto);
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: uto %s(%d) to oss\n",
+                                      track_to_upload->name, track_to_upload->body_bytes);
+                    release_track(track_to_upload);
+                } else {
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "upload_to_oss_thread: APR_SUCCESS but track_to_upload is null\n");
+                }
+                break;
+        }
+    }
+
+    end:
+    return nullptr;
+}
+
+#define MAX_API_ARGC 10
+
+// start_oss_upload akid=<akid> aksecret=<aksecret> endpoint=<endpoint> bucket=<bucket_name>
+SWITCH_STANDARD_API(start_oss_upload_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "start_oss_upload: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    if (g_upload_to_oss_thread) {
+        stream->write_function(stream, "start_oss_upload: upload_to_oss has already running.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
 
     switch_status_t status = SWITCH_STATUS_SUCCESS;
     char *_oss_ak_id = nullptr;
     char *_oss_ak_secret = nullptr;
     char *_endpoint = nullptr;
     char *_bucket = nullptr;
-    char *_object = nullptr;
-    char *_track_id = nullptr;
 
     switch_memory_pool_t *pool;
     switch_core_new_memory_pool(&pool);
@@ -1016,7 +1126,7 @@ SWITCH_STANDARD_API(oss_test1_function) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
 
     if (argc < 6) {
-        stream->write_function(stream, "akid/aksecret/endpoint/bucket/object/trackid are required.\n");
+        stream->write_function(stream, "akid/aksecret/endpoint/bucket are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
@@ -1044,72 +1154,30 @@ SWITCH_STANDARD_API(oss_test1_function) {
                     _bucket = val;
                     continue;
                 }
-                if (!strcasecmp(var, "object")) {
-                    _object = val;
-                    continue;
-                }
-                if (!strcasecmp(var, "trackid")) {
-                    _track_id = val;
-                    continue;
-                }
             }
         }
     }
 
-    if (!_oss_ak_id || !_oss_ak_secret || !_endpoint || !_bucket || !_object || !_track_id) {
-        stream->write_function(stream, "akid/aksecret/endpoint/bucket/object/trackid are required.\n");
+    if (!_oss_ak_id || !_oss_ak_secret || !_endpoint || !_bucket ) {
+        stream->write_function(stream, "akid/aksecret/endpoint/bucket are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
     {
-        auto iter = g_pcm_tracks.find(_track_id);
-        if (iter == g_pcm_tracks.end() || !iter->second) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "oss_test1 failed, can't found track by %s\n",
-                              _track_id);
-            switch_goto_status(SWITCH_STATUS_SUCCESS, end);
-        }
-        track = iter->second;
-    }
+        switch_threadattr_t *thd_attr = nullptr;
+        switch_threadattr_create(&thd_attr, g_mod_pool);
+        switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
 
-    /* 在程序入口调用aos_http_io_initialize方法来初始化网络、内存等全局资源。*/
-    if (aos_http_io_initialize(NULL, 0) != AOSE_OK) {
-        exit(1);
-    }
+        auto uto = (upload_to_oss_t*)switch_core_alloc(g_mod_pool, sizeof(upload_to_oss_t));
+        uto->oss_ak_id = switch_core_strdup(g_mod_pool, _oss_ak_id);
+        uto->oss_ak_secret = switch_core_strdup(g_mod_pool, _oss_ak_secret);
+        uto->endpoint = switch_core_strdup(g_mod_pool, _endpoint);
+        uto->bucket = switch_core_strdup(g_mod_pool, _bucket);
+        uto->upload_queue = g_tracks_to_upload;
 
-    /* 重新创建一个内存池，第二个参数是NULL，表示没有继承其它内存池。*/
-    aos_pool_create(&aos_pool, NULL);
-    /* 在内存池中分配内存给options。*/
-    oss_client_options = oss_request_options_create(aos_pool);
-    /* 初始化Client的选项oss_client_options。*/
-    init_options(oss_client_options, _oss_ak_id, _oss_ak_secret, _endpoint);
-
-    aos_str_set(&bucket, _bucket);
-    aos_str_set(&object, _object);
-    aos_list_init(&buffer);
-    {
-        aos_buf_t *content = NULL;
-        content = aos_buf_pack(oss_client_options->pool, track, TRACK_FIXED_LEN);
-        aos_list_add_tail(&content->node, &buffer);
-
-        pcm_slice_t *current = track->header;
-        while (current) {
-            content = aos_buf_pack(oss_client_options->pool, &(current->_from_answered), SLICE_FIXED_LEN + current->_raw_len);
-            aos_list_add_tail(&content->node, &buffer);
-            current = current->_next;
-        }
+        switch_thread_create(&g_upload_to_oss_thread, thd_attr,
+                             reinterpret_cast<switch_thread_start_t>(upload_to_oss_thread), uto, g_mod_pool);
     }
-    /* 上传文件。*/
-    resp_status = oss_put_object_from_buffer(oss_client_options, &bucket, &object, &buffer, headers, &resp_headers);
-    /* 判断上传是否成功。*/
-    if (aos_status_is_ok(resp_status)) {
-        stream->write_function(stream, "put object from buffer succeeded\n");
-    } else {
-        stream->write_function(stream, "put object from buffer failed\n");
-    }
-    /* 释放内存池，相当于释放了请求过程中各资源分配的内存。*/
-    aos_pool_destroy(aos_pool);
-    /* 释放之前分配的全局资源。*/
-    aos_http_io_deinitialize();
 
     end:
     switch_core_destroy_memory_pool(&pool);
@@ -1338,9 +1406,10 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
 }
 
 static void init_track(const switch_codec_implementation_t &read_impl, switch_da_t *pvt) {
-    pvt->track = (pcm_track_t*)malloc(sizeof(pcm_track_t));
+    pvt->track = (pcm_track_t*)malloc(sizeof(pcm_track_t) + strlen(pvt->save_pcm)+1);
     memset(pvt->track, 0, sizeof(pcm_track_t));
     memcpy(pvt->track->version, PCM_VERSION, sizeof(PCM_VERSION));
+    strcpy(pvt->track->name, pvt->save_pcm);
     pvt->track->sample.actual_samples_per_second = read_impl.actual_samples_per_second;
     pvt->track->sample.microseconds_per_packet = read_impl.microseconds_per_packet;
 }
@@ -1570,9 +1639,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
 
     // register API
     SWITCH_ADD_API(api_interface,
-                   "oss_test1",
-                   "oss_test1 api",
-                   oss_test1_function,
+                   "start_oss_upload",
+                   "start_oss_upload api",
+                   start_oss_upload_function,
                    "<cmd><args>");
 
     SWITCH_ADD_API(api_interface,
@@ -1603,7 +1672,24 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
 //        switch_console_set_complete("add tasktest1 [args]");
 //        switch_console_set_complete("add tasktest2 [args]");
 
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " aliasr_load\n");
+    switch_core_new_memory_pool(&g_mod_pool) ;
+    switch_queue_create (&g_tracks_to_upload, MAX_TRACK_PENDING_UPLOAD, g_mod_pool);
+
+    /* 在程序入口调用aos_http_io_initialize方法来初始化网络、内存等全局资源。*/
+    if (aos_http_io_initialize(NULL, 0) != AOSE_OK) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to aos_http_io_initialize\n");
+    }
+
+    switch_thread_t *thread = nullptr;
+    switch_threadattr_t *thd_attr = nullptr;
+
+    switch_threadattr_create(&thd_attr, g_mod_pool);
+    switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
+
+    switch_thread_create(&g_upload_to_oss_thread, thd_attr, reinterpret_cast<switch_thread_start_t>(upload_to_oss_thread),
+                         g_tracks_to_upload, g_mod_pool);
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "mod_aliasr_load\n");
 
     return SWITCH_STATUS_SUCCESS;
 }
@@ -1611,6 +1697,13 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
  *  定义shutdown函数，关闭时运行
  */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown) {
+
+    switch_queue_term(g_tracks_to_upload);
+
+    /* 释放之前分配的全局资源。*/
+    aos_http_io_deinitialize();
+
+    switch_core_destroy_memory_pool(&g_mod_pool);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " mod_aliasr_shutdown called\n");
 
     return SWITCH_STATUS_SUCCESS;
