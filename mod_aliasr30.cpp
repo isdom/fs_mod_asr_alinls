@@ -1680,7 +1680,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to aos_http_io_initialize\n");
     }
 
-    switch_thread_t *thread = nullptr;
     switch_threadattr_t *thd_attr = nullptr;
 
     switch_threadattr_create(&thd_attr, g_mod_pool);
