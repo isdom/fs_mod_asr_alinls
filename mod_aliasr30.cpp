@@ -1672,21 +1672,13 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
 //        switch_console_set_complete("add tasktest1 [args]");
 //        switch_console_set_complete("add tasktest2 [args]");
 
-    switch_core_new_memory_pool(&g_mod_pool) ;
-    switch_queue_create (&g_tracks_to_upload, MAX_TRACK_PENDING_UPLOAD, g_mod_pool);
+    switch_core_new_memory_pool(&g_mod_pool);
+    switch_queue_create(&g_tracks_to_upload, MAX_TRACK_PENDING_UPLOAD, g_mod_pool);
 
     /* 在程序入口调用aos_http_io_initialize方法来初始化网络、内存等全局资源。*/
     if (aos_http_io_initialize(NULL, 0) != AOSE_OK) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "failed to aos_http_io_initialize\n");
     }
-
-    switch_threadattr_t *thd_attr = nullptr;
-
-    switch_threadattr_create(&thd_attr, g_mod_pool);
-    switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-
-    switch_thread_create(&g_upload_to_oss_thread, thd_attr, reinterpret_cast<switch_thread_start_t>(upload_to_oss_thread),
-                         g_tracks_to_upload, g_mod_pool);
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "mod_aliasr_load\n");
 
