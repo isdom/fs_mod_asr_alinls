@@ -1125,7 +1125,7 @@ SWITCH_STANDARD_API(start_oss_upload_function) {
     int argc = switch_split(mycmd, ' ', argv);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
 
-    if (argc < 6) {
+    if (argc < 4) {
         stream->write_function(stream, "akid/aksecret/endpoint/bucket are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
