@@ -985,8 +985,9 @@ typedef struct {
     const char *oss_ak_secret;
     const char *endpoint;
     const char *bucket;
-    switch_queue_t *upload_queue;
-} upload_to_oss_t;
+} access_oss_t;
+
+access_oss_t *g_access_oss;
 
 /* yourEndpoint填写Bucket所在地域对应的Endpoint。以华东1（杭州）为例，Endpoint填写为https://oss-cn-hangzhou.aliyuncs.com。*/
 //const char *endpoint = "yourEndpoint";
@@ -1009,7 +1010,7 @@ void init_options(oss_request_options_t *options, const char *akid, const char *
     options->ctl = aos_http_controller_create(options->pool, 0);
 }
 
-void upload_to_oss(pcm_track_t *track, upload_to_oss_t *uto) {
+void upload_to_oss(pcm_track_t *track, access_oss_t *aco) {
     /* 用于内存管理的内存池（pool），等价于apr_pool_t。其实现代码在apr库中。*/
     aos_pool_t *aos_pool;
     /* 创建并初始化options，该参数包括endpoint、access_key_id、acces_key_secret、is_cname、curl等全局配置信息。*/
@@ -1027,9 +1028,9 @@ void upload_to_oss(pcm_track_t *track, upload_to_oss_t *uto) {
     /* 在内存池中分配内存给options。*/
     oss_client_options = oss_request_options_create(aos_pool);
     /* 初始化Client的选项oss_client_options。*/
-    init_options(oss_client_options, uto->oss_ak_id, uto->oss_ak_secret, uto->endpoint);
+    init_options(oss_client_options, aco->oss_ak_id, aco->oss_ak_secret, aco->endpoint);
 
-    aos_str_set(&bucket, uto->bucket);
+    aos_str_set(&bucket, aco->bucket);
     aos_str_set(&object, track->name);
     aos_list_init(&buffer);
     {
@@ -1056,18 +1057,18 @@ void upload_to_oss(pcm_track_t *track, upload_to_oss_t *uto) {
     aos_pool_destroy(aos_pool);
 }
 
-static void *SWITCH_THREAD_FUNC upload_to_oss_thread(switch_thread_t *thread, upload_to_oss_t *uto) {
+static void *SWITCH_THREAD_FUNC upload_to_oss_thread(switch_thread_t *thread, switch_queue_t *upload_queue) {
 
     pcm_track_t *track_to_upload = nullptr;
 
     while (true) {
-        const switch_status_t status = switch_queue_pop_timeout(uto->upload_queue,
+        const switch_status_t status = switch_queue_pop_timeout(upload_queue,
                                                                 reinterpret_cast<void **>(&track_to_upload),
                                                                 500 * 1000);
         switch (status) {
             // the request timed out
             case APR_TIMEUP:
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: fetch timeout\n");
+                // switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: fetch timeout\n");
                 break;
                 //  the blocking was interrupted (try again)
             case APR_EINTR:
@@ -1080,8 +1081,8 @@ static void *SWITCH_THREAD_FUNC upload_to_oss_thread(switch_thread_t *thread, up
                 //  on a successfull pop
             case APR_SUCCESS:
                 if (track_to_upload) {
-                    upload_to_oss(track_to_upload, uto);
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: uto %s(%d) to oss\n",
+                    upload_to_oss(track_to_upload, g_access_oss);
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "upload_to_oss_thread: upload %s(%d) to oss\n",
                                       track_to_upload->name, track_to_upload->body_bytes);
                     release_track(track_to_upload);
                 } else {
@@ -1168,15 +1169,15 @@ SWITCH_STANDARD_API(start_oss_upload_function) {
         switch_threadattr_create(&thd_attr, g_mod_pool);
         switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
 
-        auto uto = (upload_to_oss_t*)switch_core_alloc(g_mod_pool, sizeof(upload_to_oss_t));
-        uto->oss_ak_id = switch_core_strdup(g_mod_pool, _oss_ak_id);
-        uto->oss_ak_secret = switch_core_strdup(g_mod_pool, _oss_ak_secret);
-        uto->endpoint = switch_core_strdup(g_mod_pool, _endpoint);
-        uto->bucket = switch_core_strdup(g_mod_pool, _bucket);
-        uto->upload_queue = g_tracks_to_upload;
+        g_access_oss = (access_oss_t*)switch_core_alloc(g_mod_pool, sizeof(access_oss_t));
+        g_access_oss->oss_ak_id = switch_core_strdup(g_mod_pool, _oss_ak_id);
+        g_access_oss->oss_ak_secret = switch_core_strdup(g_mod_pool, _oss_ak_secret);
+        g_access_oss->endpoint = switch_core_strdup(g_mod_pool, _endpoint);
+        g_access_oss->bucket = switch_core_strdup(g_mod_pool, _bucket);
 
         switch_thread_create(&g_upload_to_oss_thread, thd_attr,
-                             reinterpret_cast<switch_thread_start_t>(upload_to_oss_thread), uto, g_mod_pool);
+                             reinterpret_cast<switch_thread_start_t>(upload_to_oss_thread),
+                             g_tracks_to_upload, g_mod_pool);
     }
 
     end:
