@@ -987,7 +987,7 @@ typedef struct {
     const char *bucket;
 } access_oss_t;
 
-access_oss_t *g_access_oss;
+access_oss_t *g_access_oss = nullptr;
 
 /* yourEndpoint填写Bucket所在地域对应的Endpoint。以华东1（杭州）为例，Endpoint填写为https://oss-cn-hangzhou.aliyuncs.com。*/
 //const char *endpoint = "yourEndpoint";
@@ -1008,6 +1008,146 @@ void init_options(oss_request_options_t *options, const char *akid, const char *
     options->config->is_cname = 0;
     /* 设置网络相关参数，比如超时时间等。*/
     options->ctl = aos_http_controller_create(options->pool, 0);
+}
+
+int read_aos_list(void *buffer, int len, aos_list_t *aos_list) {
+    int wsize;
+    int bytes = 0;
+    aos_buf_t *b;
+    aos_buf_t *n;
+
+    aos_list_for_each_entry_safe(aos_buf_t, b, n, aos_list, node) {
+        wsize = aos_buf_size(b);
+        if (wsize == 0) {
+            aos_list_del(&b->node);
+            continue;
+        }
+        wsize = aos_min(len - bytes, wsize);
+        if (wsize == 0) {
+            break;
+        }
+        memcpy((uint8_t*)buffer + bytes, b->pos, wsize);
+        b->pos += wsize;
+        bytes += wsize;
+        if (b->pos == b->last) {
+            aos_list_del(&b->node);
+        }
+    }
+
+    return bytes;
+}
+
+pcm_track_t *load_from_oss(const char *object_name, access_oss_t *aco) {
+    pcm_track_t *track = nullptr;
+    /* 用于内存管理的内存池（pool），等价于apr_pool_t。其实现代码在apr库中。*/
+    aos_pool_t *pool;
+    /* 重新创建一个内存池，第二个参数是NULL，表示没有继承其它内存池。*/
+    aos_pool_create(&pool, nullptr);
+    /* 创建并初始化options，该参数包括endpoint、access_key_id、acces_key_secret、is_cname、curl等全局配置信息。*/
+    oss_request_options_t *oss_client_options;
+    /* 在内存池中分配内存给options。*/
+    oss_client_options = oss_request_options_create(pool);
+    /* 初始化Client的选项oss_client_options。*/
+    init_options(oss_client_options, aco->oss_ak_id, aco->oss_ak_secret, aco->endpoint);
+    /* 初始化参数。*/
+    aos_string_t bucket;
+    aos_string_t object;
+    aos_list_t buffer;
+    aos_buf_t *content = nullptr;
+    aos_table_t *params = nullptr;
+    aos_table_t *headers = nullptr;
+    aos_table_t *resp_headers = nullptr;
+    aos_status_t *resp_status = nullptr;
+
+    int64_t len = 0;
+    int64_t size = 0;
+    int64_t pos = 0;
+    aos_str_set(&bucket, aco->bucket);
+    aos_str_set(&object, object_name);
+    aos_list_init(&buffer);
+    /* 下载文件到本地内存。*/
+    resp_status = oss_get_object_to_buffer(oss_client_options, &bucket, &object,
+                                           headers, params, &buffer, &resp_headers);
+    if (aos_status_is_ok(resp_status)) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "get object to buffer succeeded\n");
+        track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
+        if (!track) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc pcm_track_t failed, OOM\n");
+            goto end;
+        }
+        memset(track, 0, sizeof(pcm_track_t));
+
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read track fixed part: %d\n", TRACK_FIXED_LEN);
+        if (read_aos_list(track, TRACK_FIXED_LEN, &buffer) < TRACK_FIXED_LEN) {
+//        if (fread(track, TRACK_FIXED_LEN, 1, input) <= 0) {
+            free(track);
+//            fclose(input);
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_sample_t failed\n");
+            track = nullptr;
+            goto end;
+        }
+        // check version: PCM1
+        if (memcmp(track->version, PCM_VERSION, sizeof(PCM_VERSION)) != 0) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "track file has unsupport version: %c%c%c%c, Abort loading!\n",
+                              track->version[0], track->version[1], track->version[2], track->version[3]);
+            free(track);
+//            fclose(input);
+            track = nullptr;
+            goto end;
+        }
+
+        int idx = 0;
+        while (!aos_list_empty(&buffer)) {
+//        while (!feof(input)) {
+            pcm_slice_t fixed;
+//            if (fread(&(fixed._from_answered), SLICE_FIXED_LEN, 1, input) <= 0) {
+            if (read_aos_list(&(fixed._from_answered), SLICE_FIXED_LEN, &buffer) < SLICE_FIXED_LEN) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read pcm_slice_t fixed failed\n");
+                break;
+            } else {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "(%d)read pcm_slice_t fixed, _raw_len: %d\n",
+                                  idx++, fixed._raw_len);
+                auto slice = (pcm_slice_t *) malloc(sizeof(pcm_slice_t) + fixed._raw_len);
+                if (!slice) {
+                    release_track(track);
+//                    fclose(input);
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc sizeof(pcm_slice_t) + fixed._raw_len = (%ld) failed, OOM\n", sizeof(pcm_slice_t) + fixed._raw_len);
+                    track = nullptr;
+                    goto end;
+                }
+                memset(slice, 0, sizeof(pcm_slice_t) + fixed._raw_len);
+                slice->_next = nullptr;
+                slice->_from_answered = fixed._from_answered;
+                slice->_raw_len = fixed._raw_len;
+//                if (fread(slice->_raw_data, fixed._raw_len, 1, input) <= 0) {
+                if (read_aos_list(slice->_raw_data, fixed._raw_len, &buffer) < fixed._raw_len) {
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "read _raw_data(%d) failed\n",
+                                      slice->_raw_len);
+                    break;
+                } else {
+                    append_raw_pcm(track, slice);
+                }
+            }
+        }
+
+        // check body size
+        uint32_t calculated_body_bytes = calc_track_body_bytes(track);
+        if (track->body_bytes != calculated_body_bytes) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "mismatched body_bytes, %d(record in file) != %d(calculated)\n",
+                              track->body_bytes, calculated_body_bytes);
+        }
+
+//        fclose(input);
+        return track;
+    }
+    else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "get object to buffer failed\n");
+    }
+
+    end:
+    /* 释放内存池，相当于释放了请求过程中各资源分配的内存。*/
+    aos_pool_destroy(pool);
+    return track;
 }
 
 void upload_to_oss(pcm_track_t *track, access_oss_t *aco) {
@@ -1227,12 +1367,13 @@ SWITCH_STANDARD_API(load_pcm_aliasr_function) {
         }
     }
 
-    if (!_file) {
-        stream->write_function(stream, "file are required.\n");
+    if (!_file || !g_access_oss) {
+        stream->write_function(stream, "file and g_access_oss are required.\n");
         switch_goto_status(SWITCH_STATUS_SUCCESS, end);
     }
 
-    track = load_track_from(_file);
+//    track = load_track_from(_file);
+    track = load_from_oss(_file, g_access_oss);
     if (track) {
         auto iter = g_pcm_tracks.find(argv[0]);
 
