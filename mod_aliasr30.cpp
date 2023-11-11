@@ -859,6 +859,9 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
     }
 
     end:
+    // set track to nullptr to avoid upload pcm data again
+    pvt->track = nullptr;
+
     if (pvt->request) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
                           switch_channel_get_name(channel));
@@ -875,8 +878,6 @@ static void *SWITCH_THREAD_FUNC replay_thread(switch_thread_t *thread, void *obj
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "replay thread ended and hangup for %s\n",
                       switch_channel_get_name(channel));
-    // release pcm to avoid save pcm data again
-//    release_track(pvt->track);
     return nullptr;
 }
 
@@ -913,23 +914,23 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
         switch_mutex_destroy(pvt->mutex);
         switch_core_destroy_memory_pool(&pvt->pool);
         if (pvt->track) {
-            // try to upload to oss
-            // save_track_to(pvt->track, pvt->save_pcm);
-            /**
-             * @returns APR_EINTR the blocking operation was interrupted (try again)
-             * @returns APR_EAGAIN the queue is full
-             * @returns APR_EOF the queue has been terminated
-             * @returns APR_SUCCESS on a successfull push
-            */
-
-            pvt->track->body_bytes = calc_track_body_bytes(pvt->track);
-            if (g_upload_to_oss_thread) {
-                if (APR_SUCCESS != switch_queue_trypush(g_tracks_to_upload, pvt->track)) {
-                    // then destroy pcms
+            if (strlen(pvt->track->name) > 0) {
+                pvt->track->body_bytes = calc_track_body_bytes(pvt->track);
+                if (g_upload_to_oss_thread) {
+                    // try to upload to oss
+                    /**
+                     * @returns APR_EINTR the blocking operation was interrupted (try again)
+                     * @returns APR_EAGAIN the queue is full
+                     * @returns APR_EOF the queue has been terminated
+                     * @returns APR_SUCCESS on a successfull push
+                    */
+                    if (APR_SUCCESS != switch_queue_trypush(g_tracks_to_upload, pvt->track)) {
+                        // then destroy pcms
+                        release_track(pvt->track);
+                    }
+                } else {
                     release_track(pvt->track);
                 }
-            } else {
-                release_track(pvt->track);
             }
         }
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
@@ -1070,12 +1071,12 @@ pcm_track_t *load_from_oss(const char *object_name, access_oss_t *aco) {
                                            headers, params, &buffer, &resp_headers);
     if (aos_status_is_ok(resp_status)) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "get object to buffer succeeded\n");
-        track = (pcm_track_t*) malloc(sizeof(pcm_track_t));
+        track = (pcm_track_t*) malloc(sizeof(pcm_track_t) + 1); // for track->name '\0'
         if (!track) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "malloc pcm_track_t failed, OOM\n");
             goto end;
         }
-        memset(track, 0, sizeof(pcm_track_t));
+        memset(track, 0, sizeof(pcm_track_t) + 1); // for name '\0'
 
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to read track fixed part: %d\n", TRACK_FIXED_LEN);
         if (read_aos_list(track, TRACK_FIXED_LEN, &buffer) < TRACK_FIXED_LEN) {
