@@ -14,6 +14,19 @@
 
 // #include <libks/ks_thread_pool.h>
 
+struct switch_runtime {
+    switch_time_t initiated;
+    switch_time_t reference;
+    int64_t offset;
+    switch_event_t *global_vars;
+    switch_hash_t *mime_types;
+    switch_hash_t *mime_type_exts;
+    switch_hash_t *ptimes;
+    switch_memory_pool_t *memory_pool;
+};
+
+extern struct switch_runtime runtime;
+
 #define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
 #define SAMPLE_RATE 8000
 
@@ -1054,15 +1067,15 @@ pcm_track_t *load_from_oss(const char *object_name, access_oss_t *aco) {
     aos_string_t bucket;
     aos_string_t object;
     aos_list_t buffer;
-    aos_buf_t *content = nullptr;
+//    aos_buf_t *content = nullptr;
     aos_table_t *params = nullptr;
     aos_table_t *headers = nullptr;
     aos_table_t *resp_headers = nullptr;
     aos_status_t *resp_status = nullptr;
 
-    int64_t len = 0;
-    int64_t size = 0;
-    int64_t pos = 0;
+//    int64_t len = 0;
+//    int64_t size = 0;
+//    int64_t pos = 0;
     aos_str_set(&bucket, aco->bucket);
     aos_str_set(&object, object_name);
     aos_list_init(&buffer);
@@ -1241,6 +1254,8 @@ static void *SWITCH_THREAD_FUNC upload_to_oss_thread(switch_thread_t *thread, sw
 
 // start_oss_upload akid=<akid> aksecret=<aksecret> endpoint=<endpoint> bucket=<bucket_name>
 SWITCH_STANDARD_API(start_oss_upload_function) {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "try to locate rtuntime: %p\n", &runtime);
+    
     if (zstr(cmd)) {
         stream->write_function(stream, "start_oss_upload: parameter missing.\n");
         return SWITCH_STATUS_SUCCESS;
