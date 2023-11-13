@@ -14,19 +14,6 @@
 
 // #include <libks/ks_thread_pool.h>
 
-struct switch_runtime {
-    switch_time_t initiated;
-    switch_time_t reference;
-    int64_t offset;
-    switch_event_t *global_vars;
-    switch_hash_t *mime_types;
-    switch_hash_t *mime_type_exts;
-    switch_hash_t *ptimes;
-    switch_memory_pool_t *memory_pool;
-};
-
-extern struct switch_runtime runtime;
-
 #define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
 #define SAMPLE_RATE 8000
 
@@ -1254,8 +1241,6 @@ static void *SWITCH_THREAD_FUNC upload_to_oss_thread(switch_thread_t *thread, sw
 
 // start_oss_upload akid=<akid> aksecret=<aksecret> endpoint=<endpoint> bucket=<bucket_name>
 SWITCH_STANDARD_API(start_oss_upload_function) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "try to locate rtuntime: %p\n", &runtime);
-    
     if (zstr(cmd)) {
         stream->write_function(stream, "start_oss_upload: parameter missing.\n");
         return SWITCH_STATUS_SUCCESS;
