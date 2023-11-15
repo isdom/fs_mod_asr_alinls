@@ -18,8 +18,9 @@ using AlibabaNls::NlsEvent;
 using AlibabaNls::LogDebug;
 using AlibabaNls::SpeechTranscriberRequest;
 
-std::string g_akId = "";
-std::string g_akSecret = "";
+
+const char *g_ak_id = nullptr;
+const char *g_ak_secret = nullptr;
 std::string g_token = "";
 long g_expireTime = -1;
 bool g_debug = false;
@@ -67,13 +68,13 @@ SpeechTranscriberRequest *generateAsrRequest(asr_callback_t *asr_callback, switc
  * 根据AccessKey ID和AccessKey Secret重新生成一个token，
  * 并获取其有效期时间戳
  */
-int generateToken(std::string akId, std::string akSecret, std::string *token, long *expireTime) {
+int generateToken(const char *akId, const char *akSecret, std::string *token, long *expireTime) {
     NlsToken nlsTokenRequest;
     nlsTokenRequest.setAccessKeyId(akId);
     nlsTokenRequest.setKeySecret(akSecret);
     //打印请求token的参数    
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "begin send generate token rquest: akId=%s, akSecret=%s\n",
-                      akId.c_str(), akSecret.c_str());
+                      akId, akSecret);
     int ret = nlsTokenRequest.applyNlsToken();
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "request success, status code=%d, token=%s, expireTime=%d, message=%s\n", ret,
@@ -349,7 +350,7 @@ SpeechTranscriberRequest *generateAsrRequest(asr_callback_t *asr_callback, switc
     if (g_expireTime - now < 10) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                           "the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret\n");
-        if (-1 == generateToken(g_akId, g_akSecret, &g_token, &g_expireTime)) {
+        if (-1 == generateToken(g_ak_id, g_ak_secret, &g_token, &g_expireTime)) {
             return nullptr;
         }
     }
@@ -409,7 +410,7 @@ SWITCH_MODULE_DEFINITION(mod_aliasr, mod_aliasr_load, mod_aliasr_shutdown, NULL)
  * 
  * @return switch_status_t 执行状态：
  */
-static switch_status_t load_config() {
+static switch_status_t load_config(switch_memory_pool_t *pool) {
     const char *cf = "aliasr.conf";
     switch_xml_t cfg, xml, settings, param;
     if (!(xml = switch_xml_open_cfg(cf, &cfg, nullptr))) {
@@ -429,11 +430,11 @@ static switch_status_t load_config() {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Read conf: %s = %s\n", var, val);
         //strcasecmp：忽略大小写比较字符串（二进制）
         if (!strcasecmp(var, "akid")) {
-            g_akId = val;
+            g_ak_id = switch_core_strdup(pool, val);
             continue;
         }
         if (!strcasecmp(var, "aksecret")) {
-            g_akSecret = val;
+            g_ak_secret = switch_core_strdup(pool, val);
             continue;
         }
         if (!strcasecmp(var, "debug")) {
@@ -1033,7 +1034,7 @@ SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
  *  定义load函数，加载时运行
  */
 SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
-    if (load_config() != SWITCH_STATUS_SUCCESS) {
+    if (load_config(pool) != SWITCH_STATUS_SUCCESS) {
         return SWITCH_STATUS_FALSE;
     }
     int ret = NlsClient::getInstance()->setLogConfig("log-transcriber", LogDebug);
