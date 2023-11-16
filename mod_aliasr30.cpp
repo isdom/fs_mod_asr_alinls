@@ -402,7 +402,81 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown);
 
 extern "C"
 {
-SWITCH_MODULE_DEFINITION(mod_aliasr, mod_aliasr_load, mod_aliasr_shutdown, NULL);
+SWITCH_MODULE_DEFINITION(mod_aliasr, mod_aliasr_load, mod_aliasr_shutdown, nullptr);
+};
+
+typedef void *(*asr_init_func_t) (switch_core_session_t *, const switch_codec_implementation_t *, const char *);
+typedef bool (*asr_start_func_t) (void *asr_data);
+typedef bool (*asr_send_audio_func_t) (void *asr_data, void *data, uint32_t data_len);
+typedef void (*asr_stop_func_t) (void *asr_data);
+
+typedef struct {
+    asr_init_func_t asr_init_func;
+    asr_start_func_t asr_start_func;
+    asr_send_audio_func_t asr_send_audio_func;
+    asr_stop_func_t asr_stop_func;
+} asr_provider_t;
+
+static void *aliasr_init(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd);
+
+static bool aliasr_start(void *asr_data);
+
+static bool aliasr_send_audio(void *asr_data, void *data, uint32_t data_len);
+
+static void aliasr_stop(void *asr_data);
+
+static const asr_provider_t g_funcs = {
+        aliasr_init,
+        aliasr_start,
+        aliasr_send_audio,
+        aliasr_stop
+};
+
+static switch_status_t on_channel_init(switch_core_session_t *session) {
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    switch_channel_set_private(channel, "ali_asr", &g_funcs);
+    return SWITCH_STATUS_SUCCESS;
+}
+
+switch_state_handler_table_t global_cs_handlers = {
+        /*! executed when the state changes to init */
+        // switch_state_handler_t on_init;
+        on_channel_init,
+        /*! executed when the state changes to routing */
+        // switch_state_handler_t on_routing;
+        nullptr,
+        /*! executed when the state changes to execute */
+        // switch_state_handler_t on_execute;
+        nullptr,
+        /*! executed when the state changes to hangup */
+        // switch_state_handler_t on_hangup;
+        nullptr,
+        /*! executed when the state changes to exchange_media */
+        // switch_state_handler_t on_exchange_media;
+        nullptr,
+        /*! executed when the state changes to soft_execute */
+        // switch_state_handler_t on_soft_execute;
+        nullptr,
+        /*! executed when the state changes to consume_media */
+        // switch_state_handler_t on_consume_media;
+        nullptr,
+        /*! executed when the state changes to hibernate */
+        // switch_state_handler_t on_hibernate;
+        nullptr,
+        /*! executed when the state changes to reset */
+        // switch_state_handler_t on_reset;
+        nullptr,
+        /*! executed when the state changes to park */
+        // switch_state_handler_t on_park;
+        nullptr,
+        /*! executed when the state changes to reporting */
+        // switch_state_handler_t on_reporting;
+        nullptr,
+        /*! executed when the state changes to destroy */
+        // switch_state_handler_t on_destroy;
+        nullptr,
+        // int flags;
+        0
 };
 
 /**
@@ -600,7 +674,7 @@ static switch_bool_t asr_callback(switch_media_bug_t *bug, void *user_data, swit
     return SWITCH_TRUE;
 }
 
-switch_status_t on_channel_destroy(switch_core_session_t *session) {
+static switch_status_t on_channel_destroy(switch_core_session_t *session) {
     switch_da_t *pvt;
     switch_channel_t *channel = switch_core_session_get_channel(session);
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
@@ -624,7 +698,7 @@ switch_status_t on_channel_destroy(switch_core_session_t *session) {
     return SWITCH_STATUS_SUCCESS;
 }
 
-switch_state_handler_table_t asr_cs_handlers = {
+switch_state_handler_table_t session_asr_handlers = {
         /*! executed when the state changes to init */
         // switch_state_handler_t on_init;
         nullptr,
@@ -666,6 +740,105 @@ switch_state_handler_table_t asr_cs_handlers = {
 };
 
 #define MAX_API_ARGC 10
+
+static void *aliasr_init(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd) {
+    char *_app_key = nullptr;
+    char *_nls_url = nullptr;
+    char *_asr_dec_vol = nullptr;
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *my_cmd = switch_core_strdup(pool, cmd);
+
+    char *argv[MAX_API_ARGC];
+    memset(argv, 0, sizeof(char *) * MAX_API_ARGC);
+
+    int argc = switch_split(my_cmd, ' ', argv);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", my_cmd, argc);
+
+    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
+        if (argv[idx]) {
+            char *ss[2] = {nullptr, nullptr};
+            int cnt = switch_split(argv[idx], '=', ss);
+            if (cnt == 2) {
+                char *var = ss[0];
+                char *val = ss[1];
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "process arg: %s = %s\n", var, val);
+                if (!strcasecmp(var, "appkey")) {
+                    _app_key = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "nls")) {
+                    _nls_url = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "asr_dec_vol")) {
+                    _asr_dec_vol = val;
+                    continue;
+                }
+            }
+        }
+    }
+
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    switch_da_t *pvt;
+    if (!(pvt = (switch_da_t *) switch_core_session_alloc(session, sizeof(switch_da_t)))) {
+        goto end;
+    }
+    pvt->started = 0;
+    pvt->stopped = 0;
+    pvt->starting = 0;
+    pvt->data_len = 0;
+    pvt->session = session;
+    pvt->app_key = switch_core_session_strdup(session, _app_key);
+    pvt->nls_url = switch_core_session_strdup(session, _nls_url);
+    pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(session, _asr_dec_vol) : nullptr;
+    if (pvt->asr_dec_vol) {
+        double db = atof(pvt->asr_dec_vol);
+        pvt->vol_multiplier = pow(10, db / 20);
+    }
+    if (switch_core_new_memory_pool(&pvt->pool) != SWITCH_STATUS_SUCCESS) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
+        pvt = nullptr;
+        goto end;
+    }
+    switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
+    switch_channel_set_private(channel, "asr", pvt);
+
+    // hook cs state change
+    if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
+    }
+    if (read_impl->actual_samples_per_second != SAMPLE_RATE) {
+        if (switch_resample_create(&pvt->re_sampler,
+                                   read_impl->actual_samples_per_second,
+                                   SAMPLE_RATE,
+                                   8 * (read_impl->microseconds_per_packet / 1000) * 2,
+                                   SWITCH_RESAMPLE_QUALITY,
+                                   1) != SWITCH_STATUS_SUCCESS) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate re_sampler\n");
+            pvt = nullptr;
+            goto end;
+        }
+    }
+
+    end:
+    switch_core_destroy_memory_pool(&pool);
+    return pvt;
+}
+
+static bool aliasr_start(void *asr_data) {
+    // TODO
+    return false;
+}
+
+static bool aliasr_send_audio(void *asr_data, void *data, uint32_t data_len) {
+    // TODO
+    return false;
+}
+
+static void aliasr_stop(void *asr_data) {
+}
 
 #if 0
 // uuid_replay_aliasr <uuid> appkey=<appkey> nls=<nls_url> trackid=<track id> debug=<true/false>
@@ -774,7 +947,7 @@ SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
         switch_channel_set_private(channel, "asr", pvt);
 
         // hook cs state change
-        if (switch_channel_add_state_handler(channel, &asr_cs_handlers) < 0) {
+        if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
         }
 
@@ -960,7 +1133,7 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         }
         switch_channel_set_private(channel, "asr", pvt);
 
-        if (switch_channel_add_state_handler(channel, &asr_cs_handlers) < 0) {
+        if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
         } // hook cs state change
 
@@ -1084,6 +1257,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
 //        switch_console_set_complete("add tasktest1 [args]");
 //        switch_console_set_complete("add tasktest2 [args]");
 
+    // register global state handlers
+    switch_core_add_state_handler(&global_cs_handlers);
+
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "mod_aliasr_load\n");
 
     return SWITCH_STATUS_SUCCESS;
@@ -1092,6 +1268,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
  *  定义shutdown函数，关闭时运行
  */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown) {
+
+    // unregister global state handlers
+    switch_core_remove_state_handler(&global_cs_handlers);
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " mod_aliasr_shutdown called\n");
 
