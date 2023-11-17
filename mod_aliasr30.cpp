@@ -419,17 +419,17 @@ typedef struct {
 
 static void *aliasr_init(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd);
 
-static bool aliasr_start(void *asr_data);
+static bool aliasr_start(switch_da_t *pvt);
 
-static bool aliasr_send_audio(void *asr_data, void *data, uint32_t data_len);
+static bool aliasr_send_audio(switch_da_t *pvt, void *data, uint32_t data_len);
 
-static void aliasr_stop(void *asr_data);
+static void aliasr_stop(switch_da_t *pvt);
 
 static const asr_provider_t g_funcs = {
         aliasr_init,
-        aliasr_start,
-        aliasr_send_audio,
-        aliasr_stop
+        reinterpret_cast<asr_start_func_t>(aliasr_start),
+        reinterpret_cast<asr_send_audio_func_t>(aliasr_send_audio),
+        reinterpret_cast<asr_stop_func_t>(aliasr_stop)
 };
 
 static switch_status_t on_channel_init(switch_core_session_t *session) {
@@ -808,6 +808,8 @@ static void *aliasr_init(switch_core_session_t *session, const switch_codec_impl
     // hook cs state change
     if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
+        pvt = nullptr;
+        goto end;
     }
     if (read_impl->actual_samples_per_second != SAMPLE_RATE) {
         if (switch_resample_create(&pvt->re_sampler,
@@ -827,170 +829,96 @@ static void *aliasr_init(switch_core_session_t *session, const switch_codec_impl
     return pvt;
 }
 
-static bool aliasr_start(void *asr_data) {
-    // TODO
-    return false;
-}
-
-static bool aliasr_send_audio(void *asr_data, void *data, uint32_t data_len) {
-    // TODO
-    return false;
-}
-
-static void aliasr_stop(void *asr_data) {
-}
-
-#if 0
-// uuid_replay_aliasr <uuid> appkey=<appkey> nls=<nls_url> trackid=<track id> debug=<true/false>
-SWITCH_STANDARD_API(uuid_replay_aliasr_function) {
-    if (zstr(cmd)) {
-        stream->write_function(stream, "uuid_replay_aliasr: parameter missing.\n");
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "uuid_replay_aliasr: parameter missing.\n");
-        return SWITCH_STATUS_SUCCESS;
-    }
-
-    switch_status_t status = SWITCH_STATUS_SUCCESS;
-    switch_core_session_t *ses = nullptr;
-    char *_appkey = nullptr;
-    char *_nlsurl = nullptr;
-    char *_asr_dec_vol = nullptr;
-    char *_trackid = nullptr;
-//    bool        _debug = false;
-
-    switch_memory_pool_t *pool;
-    switch_core_new_memory_pool(&pool);
-    char *mycmd = switch_core_strdup(pool, cmd);
-
-    char *argv[MAX_API_ARGC];
-    memset(argv, 0, sizeof(char *) * MAX_API_ARGC);
-
-    int argc = switch_split(mycmd, ' ', argv);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
-
-    if (argc < 1) {
-        stream->write_function(stream, "uuid is required.\n");
-        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
-    }
-
-    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
-        if (argv[idx]) {
-            char *ss[2] = {0, 0};
-            int cnt = switch_split(argv[idx], '=', ss);
-            if (cnt == 2) {
-                char *var = ss[0];
-                char *val = ss[1];
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "process arg: %s = %s\n", var, val);
-                if (!strcasecmp(var, "appkey")) {
-                    _appkey = val;
-                    continue;
-                }
-                if (!strcasecmp(var, "nls")) {
-                    _nlsurl = val;
-                    continue;
-                }
-//                if (!strcasecmp(var, "debug")) {
-//                    if (!strcasecmp(val, "true")) {
-//                        _debug = true;
-//                    }
-//                    continue;
-//                }
-                if (!strcasecmp(var, "asr_dec_vol")) {
-                    _asr_dec_vol = val;
-                    continue;
-                }
-                if (!strcasecmp(var, "trackid")) {
-                    _trackid = val;
-                    continue;
-                }
+static bool aliasr_start(switch_da_t *pvt) {
+    bool  ret_val = false;
+    switch_mutex_lock(pvt->mutex);
+    if (pvt->started == 0) {
+        if (pvt->starting == 0) {
+            pvt->starting = 1;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
+            switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+            auto asr_callback = (asr_callback_t*)malloc(sizeof(asr_callback_t));
+            asr_callback->unique_id = strdup(switch_channel_get_uuid(channel));
+            switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
+            asr_callback->caller = strdup(profile->caller_id_number);
+            asr_callback->callee = strdup(profile->callee_id_number);
+            SpeechTranscriberRequest *request = generateAsrRequest(asr_callback, pvt);
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
+                              asr_callback->caller, asr_callback->callee);
+            if (!request) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
+                                  switch_channel_get_name(channel));
+                ret_val = false;
+                goto unlock;
             }
+            pvt->request = request;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init SpeechTranscriberRequest.%s\n",
+                              switch_channel_get_name(channel));
+            if (pvt->request->start() < 0) {
+                pvt->stopped = 1;
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+                                  "start() failed. may be can not connect server. please check network or firewalld:%s\n",
+                                  switch_channel_get_name(channel));
+                ret_val = false;
+                goto unlock;
+            }
+            ret_val = true;
         }
     }
 
-    if (!_appkey || !_nlsurl || !_trackid) {
-        stream->write_function(stream, "appkey/nls/trackid are required.\n");
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "appkey/nls/trackid are required.\n");
-        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
-    }
+    unlock:
+    switch_mutex_unlock(pvt->mutex);
+    return ret_val;
+}
 
-    ses = switch_core_session_force_locate(argv[0]);
-    if (!ses) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "replay to aliasr failed, can't found session by %s\n",
-                          argv[0]);
-    } else {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting replay to aliasr:%s\n",
+static bool aliasr_send_audio(switch_da_t *pvt, void *data, uint32_t data_len) {
+    bool  ret_val = false;
+    // send audio to asr
+    switch_mutex_lock(pvt->mutex);
+
+    if (pvt->re_sampler) {
+        //====== resample ==== ///
+        switch_resample_process(pvt->re_sampler, (int16_t *)data, (int) data_len / 2 / 1);
+        memcpy(data, pvt->re_sampler->to, pvt->re_sampler->to_len * 2 * 1);
+        data_len = pvt->re_sampler->to_len * 2 * 1;
+        if (g_debug) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", pvt->re_sampler->to_len);
+        }
+    }
+    if (pvt->asr_dec_vol) {
+        adjustVolume((int16_t *) data, (size_t) data_len / 2, pvt->vol_multiplier);
+    }
+    if (pvt->request->sendAudio((uint8_t*)data, (size_t) data_len) < 0) {
+        pvt->stopped = 1;
+        switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "send audio failed:%s\n",
                           switch_channel_get_name(channel));
-
-        switch_thread_t *thread = nullptr;
-        switch_threadattr_t *thd_attr = nullptr;
-        switch_da_t *pvt;
-        if (!(pvt = (switch_da_t *) switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
-            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
-        }
-        pvt->started = 0;
-        pvt->stopped = 0;
-        pvt->starting = 0;
-        pvt->data_len = 0;
-        pvt->session = ses;
-        pvt->app_key = switch_core_session_strdup(ses, _appkey);
-        pvt->nls_url = switch_core_session_strdup(ses, _nlsurl);
-        pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(ses, _asr_dec_vol) : nullptr;
-        if (pvt->asr_dec_vol) {
-            double db = atof(pvt->asr_dec_vol);
-            pvt->vol_multiplier = pow(10, db / 20);
-        }
-        if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
-            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
-        }
-        switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
-        switch_channel_set_private(channel, "asr", pvt);
-
-        // hook cs state change
-        if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
-        }
-
-        {
-            auto iter = g_pcm_tracks.find(_trackid);
-            if (iter == g_pcm_tracks.end() || !iter->second) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "replay to aliasr failed, can't found track by %s\n",
-                                  _trackid);
-                switch_goto_status(SWITCH_STATUS_SUCCESS, end);
-            }
-            pvt->track = iter->second;
-        }
-
-        if (pvt->track->sample.actual_samples_per_second != SAMPLE_RATE) {
-            if (switch_resample_create(&pvt->re_sampler,
-                                       pvt->track->sample.actual_samples_per_second,
-                                       SAMPLE_RATE,
-                                       8 * (pvt->track->sample.microseconds_per_packet / 1000) * 2,
-                                       SWITCH_RESAMPLE_QUALITY,
-                                       1) != SWITCH_STATUS_SUCCESS) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate re_sampler\n");
-                switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
-            }
-        }
-
-        switch_threadattr_create(&thd_attr, pvt->pool);
-        switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-
-        switch_thread_create(&thread, thd_attr, replay_thread, pvt, pvt->pool);
-
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_INFO, "%s Start Replay To ASR\n",
-                          switch_channel_get_name(channel));
-        unlock:
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
+        ret_val = false;
+        goto unlock;
+    }
+    ret_val = true;
+    if (g_debug) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "SWITCH_ABC_TYPE_READ: send audio %d\n",
+                          data_len);
     }
 
-    end:
-    switch_core_destroy_memory_pool(&pool);
-    return status;
+    unlock:
+    switch_mutex_unlock(pvt->mutex);
+    return ret_val;
 }
-#endif
+
+static void aliasr_stop(switch_da_t *pvt) {
+    if (pvt->request) {
+        switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
+                          switch_channel_get_name(channel));
+        pvt->request->stop();
+        //7: 识别结束, 释放request对象
+        NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n",
+                          switch_channel_get_name(channel));
+    }
+}
 
 // uuid_start_aliasr <uuid> appkey=<appkey> nls=<nls_url> debug=<true/false> savepcm=<local path>
 SWITCH_STANDARD_API(uuid_start_aliasr_function) {
@@ -1223,24 +1151,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
 
     // register API
-//    SWITCH_ADD_API(api_interface,
-//                   "start_oss_upload",
-//                   "start_oss_upload api",
-//                   start_oss_upload_function,
-//                   "<cmd><args>");
-//
-//    SWITCH_ADD_API(api_interface,
-//                   "load_pcm_aliasr",
-//                   "load_pcm_aliasr api",
-//                   load_pcm_aliasr_function,
-//                   "<cmd><args>");
-//
-//    SWITCH_ADD_API(api_interface,
-//                   "uuid_replay_aliasr",
-//                   "uuid_replay_aliasr api",
-//                   uuid_replay_aliasr_function,
-//                   "<cmd><args>");
-
     SWITCH_ADD_API(api_interface,
                    "uuid_start_aliasr",
                    "uuid_start_aliasr api",
