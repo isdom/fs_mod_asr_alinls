@@ -62,7 +62,6 @@ typedef struct {
     int started;
     int stopped;
     int starting;
-    int data_len;
     switch_mutex_t *mutex;
     switch_memory_pool_t *pool;
     switch_audio_resampler_t *re_sampler;
@@ -72,11 +71,12 @@ typedef struct {
     float vol_multiplier;
     void *rar_data;
     record_replay_t *rar_funcs;
-} switch_da_t;
+    asr_callback_t *asr_callback;
+} ali_asr_context_t;
 
 typedef void (*asr_callback_func_t)(NlsEvent *, void *);
 
-SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, switch_da_t *pvt);
+SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, ali_asr_context_t *pvt);
 
 /**
  * 根据AccessKey ID和AccessKey Secret重新生成一个token，
@@ -114,39 +114,21 @@ int generateToken(const char *akId, const char *akSecret, std::string *token, lo
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
  * @param asr_context 回调自定义参数，默认为 nullptr, 可以根据需求自定义参数
  */
-void onAsrTranscriptionStarted(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: %s\n", asr_context->unique_id);
+void onAsrTranscriptionStarted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: status code=%d, task id=%s\n",
                       cbEvent->getStatusCode(), cbEvent->getTaskId());
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: all response=%s\n",
                       cbEvent->getAllResponse());
-    if (asr_context->asr_callback) {
-        asr_context->asr_callback->on_asr_started_func(asr_context->asr_callback->asr_caller);
-    } else {
-        switch_da_t *pvt;
-        switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
-        if (ses) {
-            switch_channel_t *channel = switch_core_session_get_channel(ses);
-            if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
-                switch_mutex_lock(pvt->mutex);
-                pvt->started = 1;
-                pvt->starting = 0;
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "I need lock!!!!!!!!!!!! \n");
-                switch_mutex_unlock(pvt->mutex);
-            }
-            switch_event_t *event = nullptr;
-            if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
-                event->subclass_name = strdup("begin_asr");
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", asr_context->unique_id);
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
-                switch_event_fire(&event);
-            }
 
-            // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-            //  We meet : ... Locked, Waiting on external entities
-            switch_core_session_rwunlock(ses);
-        }
+    switch_mutex_lock(pvt->mutex);
+    pvt->started = 1;
+    pvt->starting = 0;
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "I need lock!!!!!!!!!!!! \n");
+    switch_mutex_unlock(pvt->mutex);
+
+    if (pvt->asr_callback) {
+        pvt->asr_callback->on_asr_started_func(pvt->asr_callback->asr_caller);
     }
 }
 
@@ -155,8 +137,8 @@ void onAsrTranscriptionStarted(NlsEvent *cbEvent, asr_context_t *asr_context) {
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
-void onAsrSentenceBegin(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceBegin: %s\n", asr_context->unique_id);
+void onAsrSentenceBegin(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceBegin: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrSentenceBegin: status code=%d, task id=%s, index=%d, time=%d\n",
                       cbEvent->getStatusCode(),
@@ -186,8 +168,8 @@ char *dupAsrResult(const char *allResponse) {
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
-void onAsrSentenceEnd(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceEnd: %s\n", asr_context->unique_id);
+void onAsrSentenceEnd(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceEnd: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrSentenceEnd: status code=%d, task id=%s, index=%d, time=%d, begin_time=%d, result=%s\n",
                       cbEvent->getStatusCode(), cbEvent->getTaskId(),
@@ -198,11 +180,13 @@ void onAsrSentenceEnd(NlsEvent *cbEvent, asr_context_t *asr_context) {
     );
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrSentenceEnd: all response=%s\n",
                       cbEvent->getAllResponse());
-    if (asr_context->asr_callback) {
+    if (pvt->asr_callback) {
         char *sentence = dupAsrResult(cbEvent->getAllResponse());
-        asr_context->asr_callback->on_asr_sentence_func(asr_context->asr_callback->asr_caller, sentence);
+        pvt->asr_callback->on_asr_sentence_func(pvt->asr_callback->asr_caller, sentence);
         free(sentence);
-    } else {
+    }
+#if 0
+    else {
         switch_event_t *event = nullptr;
         switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
         if (ses) {
@@ -229,6 +213,7 @@ void onAsrSentenceEnd(NlsEvent *cbEvent, asr_context_t *asr_context) {
             switch_core_session_rwunlock(ses);
         }
     }
+#endif
 }
 
 /**
@@ -237,8 +222,8 @@ void onAsrSentenceEnd(NlsEvent *cbEvent, asr_context_t *asr_context) {
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
-void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionResultChanged: %s\n", asr_context->unique_id);
+void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionResultChanged: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrTranscriptionResultChanged: status code=%d, task id=%s, index=%d, time=%d, result=%s\n",
                       cbEvent->getStatusCode(), cbEvent->getTaskId(),
@@ -248,11 +233,13 @@ void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, asr_context_t *asr_conte
     );
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrTranscriptionResultChanged: all response=%s\n",
                       cbEvent->getAllResponse());
-    if (asr_context->asr_callback) {
+    if (pvt->asr_callback) {
         char *result = dupAsrResult(cbEvent->getAllResponse());
-        asr_context->asr_callback->on_asr_result_changed_func(asr_context->asr_callback->asr_caller, result);
+        pvt->asr_callback->on_asr_result_changed_func(pvt->asr_callback->asr_caller, result);
         free(result);
-    } else {
+    }
+#if 0
+    else {
         switch_event_t *event = nullptr;
         switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
         if (ses) {
@@ -276,6 +263,7 @@ void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, asr_context_t *asr_conte
             switch_core_session_rwunlock(ses);
         }
     }
+#endif
 }
 
 /**
@@ -286,16 +274,17 @@ void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, asr_context_t *asr_conte
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  * @return
  */
-void onAsrTranscriptionCompleted(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionCompleted: %s\n", asr_context->unique_id);
+void onAsrTranscriptionCompleted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionCompleted: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrTranscriptionCompleted: status code=%d, task id=%s\n", cbEvent->getStatusCode(),
                       cbEvent->getTaskId());
-    switch_da_t *pvt;
+#if 0
+    ali_asr_context_t *pvt;
     switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
     if (ses) {
         switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
+        if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
             //        if(pvt->frameDataBuffer){
             //            free(pvt->frameDataBuffer);
             //        }
@@ -304,6 +293,7 @@ void onAsrTranscriptionCompleted(NlsEvent *cbEvent, asr_context_t *asr_context) 
         //  We meet : ... Locked, Waiting on external entities
         switch_core_session_rwunlock(ses);
     }
+#endif
 }
 
 /**
@@ -313,18 +303,23 @@ void onAsrTranscriptionCompleted(NlsEvent *cbEvent, asr_context_t *asr_context) 
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  * @return
  */
-void onAsrTaskFailed(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTaskFailed: %s\n", asr_context->unique_id);
+void onAsrTaskFailed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTaskFailed: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrTaskFailed: status code=%d, task id=%s, error message=%s\n", cbEvent->getStatusCode(),
                       cbEvent->getTaskId(), cbEvent->getErrorMessage());
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "onAsrTaskFailed: all response=%s\n",
                       cbEvent->getAllResponse());
-    switch_da_t *pvt;
+
+    switch_mutex_lock(pvt->mutex);
+    pvt->started = 0;
+    switch_mutex_unlock(pvt->mutex);
+#if 0
+    ali_asr_context_t *pvt;
     switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
     if (ses) {
         switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
+        if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
             switch_mutex_lock(pvt->mutex);
             pvt->started = 0;
             switch_mutex_unlock(pvt->mutex);
@@ -333,6 +328,7 @@ void onAsrTaskFailed(NlsEvent *cbEvent, asr_context_t *asr_context) {
         //  We meet : ... Locked, Waiting on external entities
         switch_core_session_rwunlock(ses);
     }
+#endif
 }
 
 /**
@@ -341,8 +337,8 @@ void onAsrTaskFailed(NlsEvent *cbEvent, asr_context_t *asr_context) {
  * @param cbEvent 
  * @param asr_context
  */
-void onAsrSentenceSemantics(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceSemantics: %s\n", asr_context->unique_id);
+void onAsrSentenceSemantics(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceSemantics: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceSemantics: all response=%s\n",
                       cbEvent->getAllResponse());
 }
@@ -353,10 +349,12 @@ void onAsrSentenceSemantics(NlsEvent *cbEvent, asr_context_t *asr_context) {
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  * @return
  */
-void onAsrChannelClosed(NlsEvent *cbEvent, asr_context_t *asr_context) {
-    if (asr_context->asr_callback) {
-        asr_context->asr_callback->on_asr_stopped_func(asr_context->asr_callback->asr_caller);
-    } else {
+void onAsrChannelClosed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    if (pvt->asr_callback) {
+        pvt->asr_callback->on_asr_stopped_func(pvt->asr_callback->asr_caller);
+    }
+#if 0
+    else {
         switch_event_t *event = nullptr;
         if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
             event->subclass_name = strdup("stop_asr");
@@ -370,6 +368,7 @@ void onAsrChannelClosed(NlsEvent *cbEvent, asr_context_t *asr_context) {
     switch_safe_free(asr_context->caller);
     switch_safe_free(asr_context->unique_id);
     switch_safe_free(asr_context);
+#endif
 }
 
 /**
@@ -378,7 +377,7 @@ void onAsrChannelClosed(NlsEvent *cbEvent, asr_context_t *asr_context) {
  * @param asr_context
  * @return SpeechTranscriberRequest* 
  */
-SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, switch_da_t *pvt) {
+SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, ali_asr_context_t *pvt) {
     time_t now;
     time(&now);
     if (g_expireTime - now < 10) {
@@ -393,6 +392,7 @@ SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, switch_
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "createTranscriberRequest failed.\n");
         return nullptr;
     }
+#if 0
     request->setOnTranscriptionStarted(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionStarted), asr_context);
     // 设置识别启动回调函数
     request->setOnTranscriptionResultChanged(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionResultChanged), asr_context);
@@ -409,6 +409,24 @@ SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, switch_
     // 设置识别通道关闭回调函数
     request->setOnSentenceSemantics(reinterpret_cast<asr_callback_func_t>(onAsrSentenceSemantics), asr_context);
     //设置二次结果返回回调函数, 开启enable_nlp后返回
+#else
+    request->setOnTranscriptionStarted(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionStarted), pvt);
+    // 设置识别启动回调函数
+    request->setOnTranscriptionResultChanged(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionResultChanged), pvt);
+    // 设置识别结果变化回调函数
+    request->setOnTranscriptionCompleted(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionCompleted), pvt);
+    // 设置语音转写结束回调函数
+    request->setOnSentenceBegin(reinterpret_cast<asr_callback_func_t>(onAsrSentenceBegin), pvt);
+    // 设置一句话开始回调函数
+    request->setOnSentenceEnd(reinterpret_cast<asr_callback_func_t>(onAsrSentenceEnd), pvt);
+    // 设置一句话结束回调函数
+    request->setOnTaskFailed(reinterpret_cast<asr_callback_func_t>(onAsrTaskFailed), pvt);
+    // 设置异常识别回调函数
+    request->setOnChannelClosed(reinterpret_cast<asr_callback_func_t>(onAsrChannelClosed), pvt);
+    // 设置识别通道关闭回调函数
+    request->setOnSentenceSemantics(reinterpret_cast<asr_callback_func_t>(onAsrSentenceSemantics), pvt);
+    //设置二次结果返回回调函数, 开启enable_nlp后返回
+#endif
     request->setAppKey(pvt->app_key);
     // 设置AppKey, 必填参数, 请参照官网申请
     request->setUrl(pvt->nls_url);
@@ -451,22 +469,22 @@ typedef struct {
     asr_stop_func_t asr_stop_func;
 } asr_provider_t;
 
-static void *aliasr_init(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd);
+static void *init_ali_asr(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd);
 
-static bool aliasr_start(switch_da_t *pvt, asr_callback_t *asr_callback);
+static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback);
 
-static bool aliasr_send_audio(switch_da_t *pvt, void *data, uint32_t data_len);
+static bool send_audio_to_ali_asr(ali_asr_context_t *pvt, void *data, uint32_t data_len);
 
-static void aliasr_stop(switch_da_t *pvt);
+static void stop_ali_asr(ali_asr_context_t *pvt);
 
 static const asr_provider_t g_funcs = {
-        aliasr_init,
-        reinterpret_cast<asr_start_func_t>(aliasr_start),
-        reinterpret_cast<asr_send_audio_func_t>(aliasr_send_audio),
-        reinterpret_cast<asr_stop_func_t>(aliasr_stop)
+        init_ali_asr,
+        reinterpret_cast<asr_start_func_t>(start_ali_asr),
+        reinterpret_cast<asr_send_audio_func_t>(send_audio_to_ali_asr),
+        reinterpret_cast<asr_stop_func_t>(stop_ali_asr)
 };
 
-static switch_status_t on_channel_init(switch_core_session_t *session) {
+static switch_status_t attach_asr_provider_on_channel_init(switch_core_session_t *session) {
     switch_channel_t *channel = switch_core_session_get_channel(session);
     switch_channel_set_private(channel, "ali_asr", &g_funcs);
     return SWITCH_STATUS_SUCCESS;
@@ -475,7 +493,7 @@ static switch_status_t on_channel_init(switch_core_session_t *session) {
 switch_state_handler_table_t global_cs_handlers = {
         /*! executed when the state changes to init */
         // switch_state_handler_t on_init;
-        on_channel_init,
+        attach_asr_provider_on_channel_init,
         /*! executed when the state changes to routing */
         // switch_state_handler_t on_routing;
         nullptr,
@@ -556,7 +574,7 @@ static switch_status_t load_config(switch_memory_pool_t *pool) {
     return SWITCH_STATUS_SUCCESS;
 }
 
-void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
+static void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
     int32_t pcmval;
     for (size_t ctr = 0; ctr < pcmlen; ctr++) {
         pcmval = pcm[ctr] * vol_multiplier;
@@ -570,7 +588,8 @@ void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
     }
 }
 
-static void handleABCTypeRead(switch_media_bug_t *bug, switch_da_t *pvt, switch_channel_t *channel) {
+#if 0
+static void handleABCTypeRead(switch_media_bug_t *bug, ali_asr_context_t *pvt, switch_channel_t *channel) {
     uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
     switch_frame_t frame = {0};
     frame.data = data;
@@ -618,7 +637,7 @@ static void handleABCTypeRead(switch_media_bug_t *bug, switch_da_t *pvt, switch_
     }
 }
 
-static void handleABCTypeClose(switch_da_t *pvt, switch_channel_t *channel) {
+static void handleABCTypeClose(ali_asr_context_t *pvt, switch_channel_t *channel) {
     if (pvt->request) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
                           switch_channel_get_name(channel));
@@ -632,7 +651,7 @@ static void handleABCTypeClose(switch_da_t *pvt, switch_channel_t *channel) {
     }
 }
 
-static void handleABCTypeInit(switch_da_t *pvt, switch_channel_t *channel) {
+static void handleABCTypeInit(ali_asr_context_t *pvt, switch_channel_t *channel) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Channel Init:%s\n",
               switch_channel_get_name(channel));
 
@@ -650,6 +669,7 @@ static void handleABCTypeInit(switch_da_t *pvt, switch_channel_t *channel) {
         if (pvt->starting == 0) {
             pvt->starting = 1;
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
+#if 0
             auto asr_context = (asr_context_t*)malloc(sizeof(asr_context_t));
             asr_context->unique_id = strdup(switch_channel_get_uuid(channel));
             switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
@@ -658,6 +678,9 @@ static void handleABCTypeInit(switch_da_t *pvt, switch_channel_t *channel) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
                               asr_context->caller, asr_context->callee);
             SpeechTranscriberRequest *request = generateAsrRequest(asr_context, pvt);
+#else
+            SpeechTranscriberRequest *request = generateAsrRequest(nullptr, pvt);
+#endif
             if (!request) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
                                   switch_channel_get_name(channel));
@@ -690,7 +713,7 @@ static void handleABCTypeInit(switch_da_t *pvt, switch_channel_t *channel) {
  * @return switch_bool_t 
  */
 static switch_bool_t asr_context(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type) {
-    auto *pvt = (switch_da_t *) user_data;
+    auto *pvt = (ali_asr_context_t *) user_data;
     switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
     switch (type) {
         case SWITCH_ABC_TYPE_INIT:
@@ -707,15 +730,16 @@ static switch_bool_t asr_context(switch_media_bug_t *bug, void *user_data, switc
     }
     return SWITCH_TRUE;
 }
+#endif
 
 static switch_status_t on_channel_destroy(switch_core_session_t *session) {
-    switch_da_t *pvt;
+    ali_asr_context_t *pvt;
     switch_channel_t *channel = switch_core_session_get_channel(session);
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
                       "%s on_destroy, release all resource for session\n",
                       switch_channel_get_name(channel));
 
-    if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
+    if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
         switch_channel_set_private(channel, "asr", nullptr);
         if (pvt->re_sampler) {
             switch_resample_destroy(&pvt->re_sampler);
@@ -775,7 +799,7 @@ switch_state_handler_table_t session_asr_handlers = {
 
 #define MAX_API_ARGC 10
 
-static void *aliasr_init(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd) {
+static void *init_ali_asr(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd) {
     char *_app_key = nullptr;
     char *_nls_url = nullptr;
     char *_asr_dec_vol = nullptr;
@@ -815,14 +839,13 @@ static void *aliasr_init(switch_core_session_t *session, const switch_codec_impl
     }
 
     switch_channel_t *channel = switch_core_session_get_channel(session);
-    switch_da_t *pvt;
-    if (!(pvt = (switch_da_t *) switch_core_session_alloc(session, sizeof(switch_da_t)))) {
+    ali_asr_context_t *pvt;
+    if (!(pvt = (ali_asr_context_t *) switch_core_session_alloc(session, sizeof(ali_asr_context_t)))) {
         goto end;
     }
     pvt->started = 0;
     pvt->stopped = 0;
     pvt->starting = 0;
-    pvt->data_len = 0;
     pvt->session = session;
     pvt->app_key = switch_core_session_strdup(session, _app_key);
     pvt->nls_url = switch_core_session_strdup(session, _nls_url);
@@ -837,10 +860,14 @@ static void *aliasr_init(switch_core_session_t *session, const switch_codec_impl
         goto end;
     }
     switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
-    switch_channel_set_private(channel, "asr", pvt);
+    switch_channel_set_private(channel, "asr", pvt);// for session_asr_handlers.on_channel_destroy
 
     // hook cs state change
     if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
+        // release all resource alloc before
+        switch_mutex_destroy(pvt->mutex);
+        switch_core_destroy_memory_pool(&pvt->pool);
+
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
         pvt = nullptr;
         goto end;
@@ -852,6 +879,11 @@ static void *aliasr_init(switch_core_session_t *session, const switch_codec_impl
                                    8 * (read_impl->microseconds_per_packet / 1000) * 2,
                                    SWITCH_RESAMPLE_QUALITY,
                                    1) != SWITCH_STATUS_SUCCESS) {
+            // release all resource alloc before
+            switch_mutex_destroy(pvt->mutex);
+            switch_core_destroy_memory_pool(&pvt->pool);
+            switch_channel_clear_state_handler(channel, &session_asr_handlers);
+
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate re_sampler\n");
             pvt = nullptr;
             goto end;
@@ -863,7 +895,7 @@ static void *aliasr_init(switch_core_session_t *session, const switch_codec_impl
     return pvt;
 }
 
-static bool aliasr_start(switch_da_t *pvt, asr_callback_t *asr_callback) {
+static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) {
     bool  ret_val = false;
     switch_mutex_lock(pvt->mutex);
     if (pvt->started == 0) {
@@ -871,6 +903,8 @@ static bool aliasr_start(switch_da_t *pvt, asr_callback_t *asr_callback) {
             pvt->starting = 1;
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
             switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+            pvt->asr_callback = asr_callback;
+#if 0
             auto asr_context = (asr_context_t*)malloc(sizeof(asr_context_t));
             asr_context->unique_id = strdup(switch_channel_get_uuid(channel));
             switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
@@ -880,6 +914,9 @@ static bool aliasr_start(switch_da_t *pvt, asr_callback_t *asr_callback) {
             SpeechTranscriberRequest *request = generateAsrRequest(asr_context, pvt);
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
                               asr_context->caller, asr_context->callee);
+#else
+            SpeechTranscriberRequest *request = generateAsrRequest(nullptr, pvt);
+#endif
             if (!request) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
                                   switch_channel_get_name(channel));
@@ -906,7 +943,7 @@ static bool aliasr_start(switch_da_t *pvt, asr_callback_t *asr_callback) {
     return ret_val;
 }
 
-static bool aliasr_send_audio(switch_da_t *pvt, void *data, uint32_t data_len) {
+static bool send_audio_to_ali_asr(ali_asr_context_t *pvt, void *data, uint32_t data_len) {
     bool  ret_val = false;
     // send audio to asr
     switch_mutex_lock(pvt->mutex);
@@ -933,7 +970,7 @@ static bool aliasr_send_audio(switch_da_t *pvt, void *data, uint32_t data_len) {
     }
     ret_val = true;
     if (g_debug) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "aliasr_send_audio: send audio %d\n",
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "send_audio_to_ali_asr: send audio %d\n",
                           data_len);
     }
 
@@ -942,7 +979,8 @@ static bool aliasr_send_audio(switch_da_t *pvt, void *data, uint32_t data_len) {
     return ret_val;
 }
 
-static void aliasr_stop(switch_da_t *pvt) {
+static void stop_ali_asr(ali_asr_context_t *pvt) {
+    switch_mutex_lock(pvt->mutex);
     if (pvt->request) {
         switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
@@ -950,11 +988,14 @@ static void aliasr_stop(switch_da_t *pvt) {
         pvt->request->stop();
         //7: 识别结束, 释放request对象
         NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+        pvt->request = nullptr;
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n",
                           switch_channel_get_name(channel));
     }
+    switch_mutex_unlock(pvt->mutex);
 }
 
+#if 0
 // uuid_start_aliasr <uuid> appkey=<appkey> nls=<nls_url> debug=<true/false> savepcm=<local path>
 SWITCH_STANDARD_API(uuid_start_aliasr_function) {
     if (zstr(cmd)) {
@@ -1035,14 +1076,14 @@ SWITCH_STANDARD_API(uuid_start_aliasr_function) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting aliasr:%s\n",
                           switch_channel_get_name(channel));
 
-        switch_da_t *pvt;
-        if (!(pvt = (switch_da_t *) switch_core_session_alloc(ses, sizeof(switch_da_t)))) {
+        ali_asr_context_t *pvt;
+        if (!(pvt = (ali_asr_context_t *) switch_core_session_alloc(ses, sizeof(ali_asr_context_t)))) {
             switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
         }
         pvt->started = 0;
         pvt->stopped = 0;
         pvt->starting = 0;
-        pvt->data_len = 0;
+//        pvt->data_len = 0;
         pvt->session = ses;
         pvt->app_key = switch_core_session_strdup(pvt->session, _appkey);
         pvt->nls_url = switch_core_session_strdup(pvt->session, _nlsurl);
@@ -1140,9 +1181,9 @@ SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "stop aliasr failed, can't found session by %s\n",
                           argv[0]);
     } else {
-        switch_da_t *pvt;
+        ali_asr_context_t *pvt;
         switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if ((pvt = (switch_da_t *) switch_channel_get_private(channel, "asr"))) {
+        if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
             switch_channel_set_private(channel, "asr", nullptr);
             switch_core_media_bug_remove(ses, &pvt->bug);
 
@@ -1165,6 +1206,7 @@ SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
     switch_core_destroy_memory_pool(&pool);
     return status;
 }
+#endif
 
 /**
  *  定义load函数，加载时运行
@@ -1184,7 +1226,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     *module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
-
+#if 0
     // register API
     SWITCH_ADD_API(api_interface,
                    "uuid_start_aliasr",
@@ -1197,10 +1239,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
                    "uuid_stop_aliasr api",
                    uuid_stop_aliasr_function,
                    "<cmd><args>");
-
     //注册终端命令自动补全
 //        switch_console_set_complete("add tasktest1 [args]");
 //        switch_console_set_complete("add tasktest2 [args]");
+#endif
 
     // register global state handlers
     switch_core_add_state_handler(&global_cs_handlers);
@@ -1216,6 +1258,8 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown) {
 
     // unregister global state handlers
     switch_core_remove_state_handler(&global_cs_handlers);
+
+    NlsClient::releaseInstance();
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " mod_aliasr_shutdown called\n");
 
