@@ -1222,7 +1222,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     }
     NlsClient::getInstance()->startWorkThread(4);
 
-    switch_api_interface_t *api_interface = nullptr;
+//    switch_api_interface_t *api_interface = nullptr;
     *module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
