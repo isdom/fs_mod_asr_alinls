@@ -4,10 +4,6 @@
 #include "nlsEvent.h"
 #include "speechTranscriberRequest.h"
 #include "nlsCommonSdk/Token.h"
-//#include <fstream>
-//#include <sys/time.h>
-// #include <map>
-//#include <queue>
 
 #define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
 #define SAMPLE_RATE 8000
@@ -24,6 +20,8 @@ const char *g_ak_secret = nullptr;
 std::string g_token = "";
 long g_expireTime = -1;
 bool g_debug = false;
+
+// public declare
 
 typedef void *(*rar_init_func_t) (switch_core_session_t *, const switch_codec_implementation_t *, const char *);
 typedef void (*rar_record_func_t) (void *, switch_time_t from_answered, const switch_frame_t *frame);
@@ -46,12 +44,28 @@ typedef struct {
     on_asr_stopped_func_t on_asr_stopped_func;
 } asr_callback_t;
 
+typedef void *(*asr_init_func_t) (switch_core_session_t *, const switch_codec_implementation_t *, const char *);
+typedef bool (*asr_start_func_t) (void *asr_data, asr_callback_t *asr_callback);
+typedef bool (*asr_send_audio_func_t) (void *asr_data, void *data, uint32_t data_len);
+typedef void (*asr_stop_func_t) (void *asr_data);
+
+typedef struct {
+    asr_init_func_t asr_init_func;
+    asr_start_func_t asr_start_func;
+    asr_send_audio_func_t asr_send_audio_func;
+    asr_stop_func_t asr_stop_func;
+} asr_provider_t;
+
+// public declare end
+
+#if 0
 typedef struct  {
     char *caller;
     char *callee;
     char *unique_id;
     asr_callback_t *asr_callback;
 } asr_context_t;
+#endif
 
 //======================================== ali asr start ===============
 
@@ -76,7 +90,7 @@ typedef struct {
 
 typedef void (*asr_callback_func_t)(NlsEvent *, void *);
 
-SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, ali_asr_context_t *pvt);
+SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt);
 
 /**
  * 根据AccessKey ID和AccessKey Secret重新生成一个token，
@@ -377,7 +391,7 @@ void onAsrChannelClosed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @param asr_context
  * @return SpeechTranscriberRequest* 
  */
-SpeechTranscriberRequest *generateAsrRequest(asr_context_t *asr_context, ali_asr_context_t *pvt) {
+SpeechTranscriberRequest *generateAsrRequest(/*asr_context_t *asr_context, */ali_asr_context_t *pvt) {
     time_t now;
     time(&now);
     if (g_expireTime - now < 10) {
@@ -456,18 +470,6 @@ extern "C"
 {
 SWITCH_MODULE_DEFINITION(mod_aliasr, mod_aliasr_load, mod_aliasr_shutdown, nullptr);
 };
-
-typedef void *(*asr_init_func_t) (switch_core_session_t *, const switch_codec_implementation_t *, const char *);
-typedef bool (*asr_start_func_t) (void *asr_data, asr_callback_t *asr_callback);
-typedef bool (*asr_send_audio_func_t) (void *asr_data, void *data, uint32_t data_len);
-typedef void (*asr_stop_func_t) (void *asr_data);
-
-typedef struct {
-    asr_init_func_t asr_init_func;
-    asr_start_func_t asr_start_func;
-    asr_send_audio_func_t asr_send_audio_func;
-    asr_stop_func_t asr_stop_func;
-} asr_provider_t;
 
 static void *init_ali_asr(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd);
 
@@ -915,7 +917,7 @@ static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) 
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
                               asr_context->caller, asr_context->callee);
 #else
-            SpeechTranscriberRequest *request = generateAsrRequest(nullptr, pvt);
+            SpeechTranscriberRequest *request = generateAsrRequest(pvt);
 #endif
             if (!request) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
