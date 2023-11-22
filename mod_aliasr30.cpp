@@ -743,6 +743,12 @@ static switch_status_t on_channel_destroy(switch_core_session_t *session) {
 
     if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
         switch_channel_set_private(channel, "asr", nullptr);
+
+        stop_ali_asr(pvt);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
+                          "%s on_destroy: stop_ali_asr\n",
+                          switch_channel_get_name(channel));
+
         if (pvt->re_sampler) {
             switch_resample_destroy(&pvt->re_sampler);
             switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
@@ -983,8 +989,8 @@ static bool send_audio_to_ali_asr(ali_asr_context_t *pvt, void *data, uint32_t d
 
 static void stop_ali_asr(ali_asr_context_t *pvt) {
     switch_mutex_lock(pvt->mutex);
+    switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
     if (pvt->request) {
-        switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
                           switch_channel_get_name(channel));
         pvt->request->stop();
@@ -992,6 +998,9 @@ static void stop_ali_asr(ali_asr_context_t *pvt) {
         NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
         pvt->request = nullptr;
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n",
+                          switch_channel_get_name(channel));
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "aliasr has already released:%s\n",
                           switch_channel_get_name(channel));
     }
     switch_mutex_unlock(pvt->mutex);
