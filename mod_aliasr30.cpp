@@ -129,6 +129,10 @@ int generateToken(const char *akId, const char *akSecret, std::string *token, lo
  * @param asr_context 回调自定义参数，默认为 nullptr, 可以根据需求自定义参数
  */
 void onAsrTranscriptionStarted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrTranscriptionStarted 调用时，确认 ali_asr_context_t * 有效
+
 //    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: status code=%d, task id=%s\n",
                       cbEvent->getStatusCode(), cbEvent->getTaskId());
@@ -152,6 +156,10 @@ void onAsrTranscriptionStarted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
 void onAsrSentenceBegin(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrSentenceBegin 调用时，确认 ali_asr_context_t * 有效
+
 //    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceBegin: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrSentenceBegin: status code=%d, task id=%s, index=%d, time=%d\n",
@@ -183,6 +191,10 @@ char *dupAsrResult(const char *allResponse) {
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
 void onAsrSentenceEnd(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrSentenceEnd 调用时，确认 ali_asr_context_t * 有效
+
 //    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceEnd: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrSentenceEnd: status code=%d, task id=%s, index=%d, time=%d, begin_time=%d, result=%s\n",
@@ -237,6 +249,10 @@ void onAsrSentenceEnd(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
 void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrTranscriptionResultChanged 调用时，确认 ali_asr_context_t * 有效
+
 //    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionResultChanged: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrTranscriptionResultChanged: status code=%d, task id=%s, index=%d, time=%d, result=%s\n",
@@ -289,6 +305,10 @@ void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, ali_asr_context_t *pvt) 
  * @return
  */
 void onAsrTranscriptionCompleted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrTranscriptionCompleted 调用时，确认 ali_asr_context_t * 有效
+
 //    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionCompleted: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrTranscriptionCompleted: status code=%d, task id=%s\n", cbEvent->getStatusCode(),
@@ -318,6 +338,10 @@ void onAsrTranscriptionCompleted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @return
  */
 void onAsrTaskFailed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrTaskFailed 调用时，确认 ali_asr_context_t * 有效
+
 //    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTaskFailed: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "onAsrTaskFailed: status code=%d, task id=%s, error message=%s\n", cbEvent->getStatusCode(),
@@ -352,6 +376,10 @@ void onAsrTaskFailed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @param asr_context
  */
 void onAsrSentenceSemantics(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrSentenceSemantics 调用时，确认 ali_asr_context_t * 有效
+
 //    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceSemantics: %s\n", asr_context->unique_id);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceSemantics: all response=%s\n",
                       cbEvent->getAllResponse());
@@ -364,6 +392,10 @@ void onAsrSentenceSemantics(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @return
  */
 void onAsrChannelClosed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
+    // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
+    // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
+    // 因此，当 onAsrChannelClosed 调用时，确认 ali_asr_context_t * 有效
+
     if (pvt->asr_callback) {
         pvt->asr_callback->on_asr_stopped_func(pvt->asr_callback->asr_caller);
     }
@@ -479,6 +511,8 @@ static bool send_audio_to_ali_asr(ali_asr_context_t *pvt, void *data, uint32_t d
 
 static void stop_ali_asr(ali_asr_context_t *pvt);
 
+static void cancel_ali_asr(ali_asr_context_t *pvt);
+
 static const asr_provider_t g_funcs = {
         init_ali_asr,
         reinterpret_cast<asr_start_func_t>(start_ali_asr),
@@ -486,7 +520,9 @@ static const asr_provider_t g_funcs = {
         reinterpret_cast<asr_stop_func_t>(stop_ali_asr)
 };
 
-static switch_status_t attach_asr_provider_on_channel_init(switch_core_session_t *session) {
+static const char *const ASR_PVT_NAME = "_asr_pvt";
+
+static switch_status_t attach_ali_asr_provider_on_channel_init(switch_core_session_t *session) {
     switch_channel_t *channel = switch_core_session_get_channel(session);
     switch_channel_set_private(channel, "ali_asr", &g_funcs);
     return SWITCH_STATUS_SUCCESS;
@@ -495,7 +531,7 @@ static switch_status_t attach_asr_provider_on_channel_init(switch_core_session_t
 switch_state_handler_table_t global_cs_handlers = {
         /*! executed when the state changes to init */
         // switch_state_handler_t on_init;
-        attach_asr_provider_on_channel_init,
+        attach_ali_asr_provider_on_channel_init,
         /*! executed when the state changes to routing */
         // switch_state_handler_t on_routing;
         nullptr,
@@ -734,19 +770,19 @@ static switch_bool_t asr_context(switch_media_bug_t *bug, void *user_data, switc
 }
 #endif
 
-static switch_status_t on_channel_destroy(switch_core_session_t *session) {
+static switch_status_t cancel_and_release_ali_asr_on_channel_destroy(switch_core_session_t *session) {
     ali_asr_context_t *pvt;
     switch_channel_t *channel = switch_core_session_get_channel(session);
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
                       "%s on_destroy, release all resource for session\n",
                       switch_channel_get_name(channel));
 
-    if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
-        switch_channel_set_private(channel, "asr", nullptr);
+    if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, ASR_PVT_NAME))) {
+        switch_channel_set_private(channel, ASR_PVT_NAME, nullptr);
 
-        stop_ali_asr(pvt);
+        cancel_ali_asr(pvt);
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
-                          "%s on_destroy: stop_ali_asr\n",
+                          "on_destroy: cancel_ali_asr -> channel: %s\n",
                           switch_channel_get_name(channel));
 
         if (pvt->re_sampler) {
@@ -800,7 +836,7 @@ switch_state_handler_table_t session_asr_handlers = {
         nullptr,
         /*! executed when the state changes to destroy */
         // switch_state_handler_t on_destroy;
-        on_channel_destroy,
+        cancel_and_release_ali_asr_on_channel_destroy,
         // int flags;
         0
 };
@@ -868,9 +904,8 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
         goto end;
     }
     switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
-    switch_channel_set_private(channel, "asr", pvt);// for session_asr_handlers.on_channel_destroy
+    switch_channel_set_private(channel, ASR_PVT_NAME, pvt);// for session_asr_handlers.cancel_and_release_ali_asr_on_channel_destroy
 
-    // hook cs state change
     if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
         // release all resource alloc before
         switch_mutex_destroy(pvt->mutex);
@@ -939,6 +974,8 @@ static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) 
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                                   "start() failed. may be can not connect server. please check network or firewalld:%s\n",
                                   switch_channel_get_name(channel));
+                NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+                pvt->request = nullptr;
                 ret_val = false;
                 goto unlock;
             }
@@ -956,30 +993,37 @@ static bool send_audio_to_ali_asr(ali_asr_context_t *pvt, void *data, uint32_t d
     // send audio to asr
     switch_mutex_lock(pvt->mutex);
 
-    if (pvt->re_sampler) {
-        //====== resample ==== ///
-        switch_resample_process(pvt->re_sampler, (int16_t *)data, (int) data_len / 2 / 1);
-        memcpy(data, pvt->re_sampler->to, pvt->re_sampler->to_len * 2 * 1);
-        data_len = pvt->re_sampler->to_len * 2 * 1;
-        if (g_debug) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", pvt->re_sampler->to_len);
+    if (pvt->request) {
+        if (pvt->re_sampler) {
+            //====== resample ==== ///
+            switch_resample_process(pvt->re_sampler, (int16_t *)data, (int) data_len / 2 / 1);
+            memcpy(data, pvt->re_sampler->to, pvt->re_sampler->to_len * 2 * 1);
+            data_len = pvt->re_sampler->to_len * 2 * 1;
+            if (g_debug) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", pvt->re_sampler->to_len);
+            }
         }
-    }
-    if (pvt->asr_dec_vol) {
-        adjustVolume((int16_t *) data, (size_t) data_len / 2, pvt->vol_multiplier);
-    }
-    if (pvt->request->sendAudio((uint8_t*)data, (size_t) data_len) < 0) {
-        pvt->stopped = 1;
+        if (pvt->asr_dec_vol) {
+            adjustVolume((int16_t *) data, (size_t) data_len / 2, pvt->vol_multiplier);
+        }
+        if (pvt->request->sendAudio((uint8_t*)data, (size_t) data_len) < 0) {
+            pvt->stopped = 1;
+            switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "send audio failed -> on channel: %s\n",
+                              switch_channel_get_name(channel));
+            ret_val = false;
+            goto unlock;
+        }
+        ret_val = true;
+        if (g_debug) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "send_audio_to_ali_asr: send audio %d\n",
+                              data_len);
+        }
+    } else {
         switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "send audio failed:%s\n",
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "try send audio but SpeechTranscriberRequest has been released -> on channel: %s\n",
                           switch_channel_get_name(channel));
         ret_val = false;
-        goto unlock;
-    }
-    ret_val = true;
-    if (g_debug) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "send_audio_to_ali_asr: send audio %d\n",
-                          data_len);
     }
 
     unlock:
@@ -997,10 +1041,30 @@ static void stop_ali_asr(ali_asr_context_t *pvt) {
         //7: 识别结束, 释放request对象
         NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
         pvt->request = nullptr;
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n",
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "stop ali asr and request is released on channel: %s\n",
                           switch_channel_get_name(channel));
     } else {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "aliasr has already released:%s\n",
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "ali asr has already stopped and released on channel:%s\n",
+                          switch_channel_get_name(channel));
+    }
+    switch_mutex_unlock(pvt->mutex);
+}
+
+static void cancel_ali_asr(ali_asr_context_t *pvt) {
+    switch_mutex_lock(pvt->mutex);
+    switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+    if (pvt->request) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "try to cancel ali asr on channel: %s\n",
+                          switch_channel_get_name(channel));
+        // 直接关闭实时音频流识别过程,调用cancel之后不会再上报任何回调事件
+        pvt->request->cancel();
+        // 释放request对象
+        NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+        pvt->request = nullptr;
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "cancel ali asr and request is released on channel: %s\n",
+                          switch_channel_get_name(channel));
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "ali asr has already stopped and released on channel:%s\n",
                           switch_channel_get_name(channel));
     }
     switch_mutex_unlock(pvt->mutex);
