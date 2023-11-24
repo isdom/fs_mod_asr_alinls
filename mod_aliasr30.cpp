@@ -48,12 +48,14 @@ typedef void *(*asr_init_func_t) (switch_core_session_t *, const switch_codec_im
 typedef bool (*asr_start_func_t) (void *asr_data, asr_callback_t *asr_callback);
 typedef bool (*asr_send_audio_func_t) (void *asr_data, void *data, uint32_t data_len);
 typedef void (*asr_stop_func_t) (void *asr_data);
+typedef void (*asr_destroy_func_t) (void *asr_data);
 
 typedef struct {
     asr_init_func_t asr_init_func;
     asr_start_func_t asr_start_func;
     asr_send_audio_func_t asr_send_audio_func;
     asr_stop_func_t asr_stop_func;
+    asr_destroy_func_t asr_destroy_func;
 } asr_provider_t;
 
 // public declare end
@@ -513,14 +515,17 @@ static void stop_ali_asr(ali_asr_context_t *pvt);
 
 static void cancel_ali_asr(ali_asr_context_t *pvt);
 
+static void destroy_ali_asr(ali_asr_context_t *pvt);
+
 static const asr_provider_t g_funcs = {
         init_ali_asr,
         reinterpret_cast<asr_start_func_t>(start_ali_asr),
         reinterpret_cast<asr_send_audio_func_t>(send_audio_to_ali_asr),
-        reinterpret_cast<asr_stop_func_t>(stop_ali_asr)
+        reinterpret_cast<asr_stop_func_t>(stop_ali_asr),
+        reinterpret_cast<asr_destroy_func_t>(destroy_ali_asr)
 };
 
-static const char *const ASR_PVT_NAME = "_asr_pvt";
+// static const char *const ASR_PVT_NAME = "_asr_pvt";
 
 static switch_status_t attach_ali_asr_provider_on_channel_init(switch_core_session_t *session) {
     switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -770,6 +775,7 @@ static switch_bool_t asr_context(switch_media_bug_t *bug, void *user_data, switc
 }
 #endif
 
+#if 0
 static switch_status_t cancel_and_release_ali_asr_on_channel_destroy(switch_core_session_t *session) {
     ali_asr_context_t *pvt;
     switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -840,6 +846,7 @@ switch_state_handler_table_t session_asr_handlers = {
         // int flags;
         0
 };
+#endif
 
 #define MAX_API_ARGC 10
 
@@ -904,8 +911,10 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
         goto end;
     }
     switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
-    switch_channel_set_private(channel, ASR_PVT_NAME, pvt);// for session_asr_handlers.cancel_and_release_ali_asr_on_channel_destroy
+    // for session_asr_handlers.cancel_and_release_ali_asr_on_channel_destroy
+    // switch_channel_set_private(channel, ASR_PVT_NAME, pvt);
 
+#if 0
     if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
         // release all resource alloc before
         switch_mutex_destroy(pvt->mutex);
@@ -915,6 +924,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
         pvt = nullptr;
         goto end;
     }
+#endif
     if (read_impl->actual_samples_per_second != SAMPLE_RATE) {
         if (switch_resample_create(&pvt->re_sampler,
                                    read_impl->actual_samples_per_second,
@@ -925,7 +935,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
             // release all resource alloc before
             switch_mutex_destroy(pvt->mutex);
             switch_core_destroy_memory_pool(&pvt->pool);
-            switch_channel_clear_state_handler(channel, &session_asr_handlers);
+            // switch_channel_clear_state_handler(channel, &session_asr_handlers);
 
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate re_sampler\n");
             pvt = nullptr;
@@ -1068,6 +1078,33 @@ static void cancel_ali_asr(ali_asr_context_t *pvt) {
                           switch_channel_get_name(channel));
     }
     switch_mutex_unlock(pvt->mutex);
+}
+
+static void destroy_ali_asr(ali_asr_context_t *pvt) {
+    switch_core_session_t *session = pvt->session;
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(pvt->session), SWITCH_LOG_NOTICE,
+                      "destroy_ali_asr: release all resource for session -> on channel: %s\n",
+                      switch_channel_get_name(channel));
+
+    // switch_channel_set_private(channel, ASR_PVT_NAME, nullptr);
+
+    cancel_ali_asr(pvt);
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
+                      "destroy_ali_asr: cancel_ali_asr -> channel: %s\n",
+                      switch_channel_get_name(channel));
+
+    if (pvt->re_sampler) {
+        switch_resample_destroy(&pvt->re_sampler);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
+                          "destroy_ali_asr: switch_resample_destroy -> on channel: %s\n",
+                          switch_channel_get_name(channel));
+    }
+    switch_mutex_destroy(pvt->mutex);
+    switch_core_destroy_memory_pool(&pvt->pool);
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
+                      "destroy_ali_asr: switch_mutex_destroy & switch_core_destroy_memory_pool -> on channel: %s\n",
+                      switch_channel_get_name(channel));
 }
 
 #if 0
