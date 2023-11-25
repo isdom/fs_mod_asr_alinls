@@ -889,7 +889,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
         }
     }
 
-    switch_channel_t *channel = switch_core_session_get_channel(session);
+    // switch_channel_t *channel = switch_core_session_get_channel(session);
     ali_asr_context_t *pvt;
     if (!(pvt = (ali_asr_context_t *) switch_core_session_alloc(session, sizeof(ali_asr_context_t)))) {
         goto end;
