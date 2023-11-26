@@ -521,7 +521,7 @@ static const asr_provider_t g_funcs = {
         init_ali_asr,
         reinterpret_cast<asr_start_func_t>(start_ali_asr),
         reinterpret_cast<asr_send_audio_func_t>(send_audio_to_ali_asr),
-        reinterpret_cast<asr_stop_func_t>(stop_ali_asr),
+        reinterpret_cast<asr_stop_func_t>(cancel_ali_asr),
         reinterpret_cast<asr_destroy_func_t>(destroy_ali_asr)
 };
 
@@ -1074,7 +1074,7 @@ static void cancel_ali_asr(ali_asr_context_t *pvt) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "cancel ali asr and request is released on channel: %s\n",
                           switch_channel_get_name(channel));
     } else {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "ali asr has already stopped and released on channel:%s\n",
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "ali asr has already cancelled and released on channel:%s\n",
                           switch_channel_get_name(channel));
     }
     switch_mutex_unlock(pvt->mutex);
