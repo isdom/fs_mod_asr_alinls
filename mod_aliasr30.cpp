@@ -79,7 +79,6 @@ typedef struct {
     int stopped;
     int starting;
     switch_mutex_t *mutex;
-    switch_memory_pool_t *pool;
     switch_audio_resampler_t *re_sampler;
     char *app_key;
     char *nls_url;
@@ -525,8 +524,6 @@ static const asr_provider_t g_funcs = {
         reinterpret_cast<asr_destroy_func_t>(destroy_ali_asr)
 };
 
-// static const char *const ASR_PVT_NAME = "_asr_pvt";
-
 static switch_status_t attach_ali_asr_provider_on_channel_init(switch_core_session_t *session) {
     switch_channel_t *channel = switch_core_session_get_channel(session);
     switch_channel_set_private(channel, "ali_asr", &g_funcs);
@@ -905,26 +902,8 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
         double db = atof(pvt->asr_dec_vol);
         pvt->vol_multiplier = pow(10, db / 20);
     }
-    if (switch_core_new_memory_pool(&pvt->pool) != SWITCH_STATUS_SUCCESS) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
-        pvt = nullptr;
-        goto end;
-    }
-    switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
-    // for session_asr_handlers.cancel_and_release_ali_asr_on_channel_destroy
-    // switch_channel_set_private(channel, ASR_PVT_NAME, pvt);
+    switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
 
-#if 0
-    if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
-        // release all resource alloc before
-        switch_mutex_destroy(pvt->mutex);
-        switch_core_destroy_memory_pool(&pvt->pool);
-
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
-        pvt = nullptr;
-        goto end;
-    }
-#endif
     if (read_impl->actual_samples_per_second != SAMPLE_RATE) {
         if (switch_resample_create(&pvt->re_sampler,
                                    read_impl->actual_samples_per_second,
@@ -934,8 +913,6 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
                                    1) != SWITCH_STATUS_SUCCESS) {
             // release all resource alloc before
             switch_mutex_destroy(pvt->mutex);
-            switch_core_destroy_memory_pool(&pvt->pool);
-            // switch_channel_clear_state_handler(channel, &session_asr_handlers);
 
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate re_sampler\n");
             pvt = nullptr;
@@ -1087,8 +1064,6 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
                       "destroy_ali_asr: release all resource for session -> on channel: %s\n",
                       switch_channel_get_name(channel));
 
-    // switch_channel_set_private(channel, ASR_PVT_NAME, nullptr);
-
     cancel_ali_asr(pvt);
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
                       "destroy_ali_asr: cancel_ali_asr -> channel: %s\n",
@@ -1101,9 +1076,8 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
                           switch_channel_get_name(channel));
     }
     switch_mutex_destroy(pvt->mutex);
-    switch_core_destroy_memory_pool(&pvt->pool);
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
-                      "destroy_ali_asr: switch_mutex_destroy & switch_core_destroy_memory_pool -> on channel: %s\n",
+                      "destroy_ali_asr: switch_mutex_destroy -> on channel: %s\n",
                       switch_channel_get_name(channel));
 }
 
