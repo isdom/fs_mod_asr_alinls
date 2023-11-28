@@ -23,14 +23,6 @@ bool g_debug = false;
 
 // public declare
 
-typedef void *(*rar_init_func_t) (switch_core_session_t *, const switch_codec_implementation_t *, const char *);
-typedef void (*rar_record_func_t) (void *, switch_time_t from_answered, const switch_frame_t *frame);
-
-typedef struct {
-    rar_init_func_t rar_init_func;
-    rar_record_func_t rar_record_func;
-} record_replay_t;
-
 typedef void (*on_asr_started_func_t) (void *);
 typedef void (*on_asr_sentence_func_t) (void *, const char *sentence);
 typedef void (*on_asr_result_changed_func_t) (void *, const char *result);
@@ -73,7 +65,6 @@ typedef struct  {
 
 typedef struct {
     switch_core_session_t *session;
-    switch_media_bug_t *bug;
     SpeechTranscriberRequest *request;
     int started;
     int stopped;
@@ -84,8 +75,6 @@ typedef struct {
     char *nls_url;
     char *asr_dec_vol;
     float vol_multiplier;
-    void *rar_data;
-    record_replay_t *rar_funcs;
     asr_callback_t *asr_callback;
 } ali_asr_context_t;
 
