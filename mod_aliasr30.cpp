@@ -52,15 +52,6 @@ typedef struct {
 
 // public declare end
 
-#if 0
-typedef struct  {
-    char *caller;
-    char *callee;
-    char *unique_id;
-    asr_callback_t *asr_callback;
-} asr_context_t;
-#endif
-
 //======================================== ali asr start ===============
 
 typedef struct {
@@ -428,24 +419,6 @@ SpeechTranscriberRequest *generateAsrRequest(/*asr_context_t *asr_context, */ali
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "createTranscriberRequest failed.\n");
         return nullptr;
     }
-#if 0
-    request->setOnTranscriptionStarted(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionStarted), asr_context);
-    // 设置识别启动回调函数
-    request->setOnTranscriptionResultChanged(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionResultChanged), asr_context);
-    // 设置识别结果变化回调函数
-    request->setOnTranscriptionCompleted(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionCompleted), asr_context);
-    // 设置语音转写结束回调函数
-    request->setOnSentenceBegin(reinterpret_cast<asr_callback_func_t>(onAsrSentenceBegin), asr_context);
-    // 设置一句话开始回调函数
-    request->setOnSentenceEnd(reinterpret_cast<asr_callback_func_t>(onAsrSentenceEnd), asr_context);
-    // 设置一句话结束回调函数
-    request->setOnTaskFailed(reinterpret_cast<asr_callback_func_t>(onAsrTaskFailed), asr_context);
-    // 设置异常识别回调函数
-    request->setOnChannelClosed(reinterpret_cast<asr_callback_func_t>(onAsrChannelClosed), asr_context);
-    // 设置识别通道关闭回调函数
-    request->setOnSentenceSemantics(reinterpret_cast<asr_callback_func_t>(onAsrSentenceSemantics), asr_context);
-    //设置二次结果返回回调函数, 开启enable_nlp后返回
-#else
     request->setOnTranscriptionStarted(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionStarted), pvt);
     // 设置识别启动回调函数
     request->setOnTranscriptionResultChanged(reinterpret_cast<asr_callback_func_t>(onAsrTranscriptionResultChanged), pvt);
@@ -462,7 +435,6 @@ SpeechTranscriberRequest *generateAsrRequest(/*asr_context_t *asr_context, */ali
     // 设置识别通道关闭回调函数
     request->setOnSentenceSemantics(reinterpret_cast<asr_callback_func_t>(onAsrSentenceSemantics), pvt);
     //设置二次结果返回回调函数, 开启enable_nlp后返回
-#endif
     request->setAppKey(pvt->app_key);
     // 设置AppKey, 必填参数, 请参照官网申请
     request->setUrl(pvt->nls_url);
@@ -617,223 +589,6 @@ static void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
     }
 }
 
-#if 0
-static void handleABCTypeRead(switch_media_bug_t *bug, ali_asr_context_t *pvt, switch_channel_t *channel) {
-    uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
-    switch_frame_t frame = {0};
-    frame.data = data;
-    frame.buflen = sizeof(data);
-    if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) != SWITCH_STATUS_FALSE) {
-        switch_mutex_lock(pvt->mutex);
-
-        if (pvt->rar_funcs) {
-            switch_channel_timetable_t *times = switch_channel_get_timetable(channel);
-
-            // channel->caller_profile->times->answered = switch_micro_time_now();
-            // https://github.com/signalwire/freeswitch/blob/792eee44d0611422cce3c3194f95125916a7d268/src/switch_channel.c#L3834C3-L3834C70
-            pvt->rar_funcs->rar_record_func(pvt->rar_data, switch_micro_time_now() - times->answered, &frame);
-        }
-
-        uint32_t data_len = frame.datalen;
-        auto *dp = (int16_t *) frame.data;
-
-        if (pvt->re_sampler) {
-            //====== resample ==== ///
-            switch_resample_process(pvt->re_sampler, dp, (int) data_len / 2 / 1);
-            memcpy(dp, pvt->re_sampler->to, pvt->re_sampler->to_len * 2 * 1);
-            data_len = pvt->re_sampler->to_len * 2 * 1;
-            if (g_debug) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR new samples:%d\n", pvt->re_sampler->to_len);
-            }
-        }
-        if (pvt->asr_dec_vol) {
-            adjustVolume((int16_t *) dp, (size_t) data_len / 2, pvt->vol_multiplier);
-        }
-        if (pvt->request->sendAudio((uint8_t *) dp, (size_t) data_len) < 0) {
-            pvt->stopped = 1;
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "send audio failed:%s\n",
-                              switch_channel_get_name(channel));
-            pvt->request->stop();
-            NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
-        }
-        if (g_debug) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "SWITCH_ABC_TYPE_READ: send audio %d\n",
-                              data_len);
-        }
-        switch_mutex_unlock(pvt->mutex);
-    } else {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "switch_core_media_bug_read failed\n");
-    }
-}
-
-static void handleABCTypeClose(ali_asr_context_t *pvt, switch_channel_t *channel) {
-    if (pvt->request) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Stop Succeed channel: %s\n",
-                          switch_channel_get_name(channel));
-        pvt->request->stop();
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr stopped:%s\n",
-                          switch_channel_get_name(channel));
-        //7: 识别结束, 释放request对象
-        NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "asr released:%s\n",
-                          switch_channel_get_name(channel));
-    }
-}
-
-static void handleABCTypeInit(ali_asr_context_t *pvt, switch_channel_t *channel) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "ASR Channel Init:%s\n",
-              switch_channel_get_name(channel));
-
-    switch_codec_t *read_codec = switch_core_session_get_read_codec(pvt->session);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "read_codec=[%s]!\n",
-                      read_codec->implementation->iananame);
-
-    if (pvt->stopped == 1) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "SWITCH_ABC_TYPE_INIT: pvt->stopped\n");
-        return;
-    }
-
-    switch_mutex_lock(pvt->mutex);
-    if (pvt->started == 0) {
-        if (pvt->starting == 0) {
-            pvt->starting = 1;
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
-#if 0
-            auto asr_context = (asr_context_t*)malloc(sizeof(asr_context_t));
-            asr_context->unique_id = strdup(switch_channel_get_uuid(channel));
-            switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
-            asr_context->caller = strdup(profile->caller_id_number);
-            asr_context->callee = strdup(profile->callee_id_number);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
-                              asr_context->caller, asr_context->callee);
-            SpeechTranscriberRequest *request = generateAsrRequest(asr_context, pvt);
-#else
-            SpeechTranscriberRequest *request = generateAsrRequest(nullptr, pvt);
-#endif
-            if (!request) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
-                                  switch_channel_get_name(channel));
-                goto unlock;
-            }
-            pvt->request = request;
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init SpeechTranscriberRequest.%s\n",
-                              switch_channel_get_name(channel));
-            if (pvt->request->start() < 0) {
-                pvt->stopped = 1;
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                                  "start() failed. may be can not connect server. please check network or firewalld:%s\n",
-                                  switch_channel_get_name(channel));
-                NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
-                // start()失败，释放request对象
-            }
-        }
-    }
-
-    unlock:
-    switch_mutex_unlock(pvt->mutex);
-}
-
-/**
- * asr 回调处理
- * 
- * @param bug 
- * @param user_data 
- * @param type 
- * @return switch_bool_t 
- */
-static switch_bool_t asr_context(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type) {
-    auto *pvt = (ali_asr_context_t *) user_data;
-    switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
-    switch (type) {
-        case SWITCH_ABC_TYPE_INIT:
-            handleABCTypeInit(pvt, channel);
-            break;
-        case SWITCH_ABC_TYPE_CLOSE:
-            handleABCTypeClose(pvt, channel);
-            break;
-        case SWITCH_ABC_TYPE_READ:
-            handleABCTypeRead(bug, pvt, channel);
-            break;
-        default:
-            break;
-    }
-    return SWITCH_TRUE;
-}
-#endif
-
-#if 0
-static switch_status_t cancel_and_release_ali_asr_on_channel_destroy(switch_core_session_t *session) {
-    ali_asr_context_t *pvt;
-    switch_channel_t *channel = switch_core_session_get_channel(session);
-    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
-                      "%s on_destroy, release all resource for session\n",
-                      switch_channel_get_name(channel));
-
-    if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, ASR_PVT_NAME))) {
-        switch_channel_set_private(channel, ASR_PVT_NAME, nullptr);
-
-        cancel_ali_asr(pvt);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
-                          "on_destroy: cancel_ali_asr -> channel: %s\n",
-                          switch_channel_get_name(channel));
-
-        if (pvt->re_sampler) {
-            switch_resample_destroy(&pvt->re_sampler);
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
-                              "%s on_destroy: switch_resample_destroy\n",
-                              switch_channel_get_name(channel));
-        }
-        switch_mutex_destroy(pvt->mutex);
-        switch_core_destroy_memory_pool(&pvt->pool);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
-                          "%s on_destroy: switch_mutex_destroy & switch_core_destroy_memory_pool\n",
-                          switch_channel_get_name(channel));
-    }
-    return SWITCH_STATUS_SUCCESS;
-}
-
-switch_state_handler_table_t session_asr_handlers = {
-        /*! executed when the state changes to init */
-        // switch_state_handler_t on_init;
-        nullptr,
-        /*! executed when the state changes to routing */
-        // switch_state_handler_t on_routing;
-        nullptr,
-        /*! executed when the state changes to execute */
-        // switch_state_handler_t on_execute;
-        nullptr,
-        /*! executed when the state changes to hangup */
-        // switch_state_handler_t on_hangup;
-        nullptr,
-        /*! executed when the state changes to exchange_media */
-        // switch_state_handler_t on_exchange_media;
-        nullptr,
-        /*! executed when the state changes to soft_execute */
-        // switch_state_handler_t on_soft_execute;
-        nullptr,
-        /*! executed when the state changes to consume_media */
-        // switch_state_handler_t on_consume_media;
-        nullptr,
-        /*! executed when the state changes to hibernate */
-        // switch_state_handler_t on_hibernate;
-        nullptr,
-        /*! executed when the state changes to reset */
-        // switch_state_handler_t on_reset;
-        nullptr,
-        /*! executed when the state changes to park */
-        // switch_state_handler_t on_park;
-        nullptr,
-        /*! executed when the state changes to reporting */
-        // switch_state_handler_t on_reporting;
-        nullptr,
-        /*! executed when the state changes to destroy */
-        // switch_state_handler_t on_destroy;
-        cancel_and_release_ali_asr_on_channel_destroy,
-        // int flags;
-        0
-};
-#endif
-
 #define MAX_API_ARGC 10
 
 static void *init_ali_asr(switch_core_session_t *session, const switch_codec_implementation_t *read_impl, const char *cmd) {
@@ -919,6 +674,11 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
 
 static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) {
     bool  ret_val = false;
+    if (pvt->stopped == 1) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "start_ali_asr: pvt->stopped\n");
+        return ret_val;
+    }
+
     switch_mutex_lock(pvt->mutex);
     if (pvt->started == 0) {
         if (pvt->starting == 0) {
@@ -926,19 +686,7 @@ static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) 
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Starting Transaction \n");
             switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
             pvt->asr_callback = asr_callback;
-#if 0
-            auto asr_context = (asr_context_t*)malloc(sizeof(asr_context_t));
-            asr_context->unique_id = strdup(switch_channel_get_uuid(channel));
-            switch_caller_profile_t *profile = switch_channel_get_caller_profile(channel);
-            asr_context->caller = strdup(profile->caller_id_number);
-            asr_context->callee = strdup(profile->callee_id_number);
-            asr_context->asr_callback = asr_callback;
-            SpeechTranscriberRequest *request = generateAsrRequest(asr_context, pvt);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Caller %s. Callee %s\n",
-                              asr_context->caller, asr_context->callee);
-#else
             SpeechTranscriberRequest *request = generateAsrRequest(pvt);
-#endif
             if (!request) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Asr Request init failed.%s\n",
                                   switch_channel_get_name(channel));
@@ -987,8 +735,13 @@ static bool send_audio_to_ali_asr(ali_asr_context_t *pvt, void *data, uint32_t d
         }
         if (pvt->request->sendAudio((uint8_t*)data, (size_t) data_len) < 0) {
             pvt->stopped = 1;
+            // 直接关闭实时音频流识别过程,调用cancel之后不会再上报任何回调事件
+            pvt->request->cancel();
+            // 释放request对象
+            NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+            pvt->request = nullptr;
             switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "send audio failed -> on channel: %s\n",
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "cancel asr bcs of send audio failed -> on channel: %s\n",
                               switch_channel_get_name(channel));
             ret_val = false;
             goto unlock;
@@ -1073,219 +826,6 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
                       switch_channel_get_name(channel));
 }
 
-#if 0
-// uuid_start_aliasr <uuid> appkey=<appkey> nls=<nls_url> debug=<true/false> savepcm=<local path>
-SWITCH_STANDARD_API(uuid_start_aliasr_function) {
-    if (zstr(cmd)) {
-        stream->write_function(stream, "uuid_start_aliasr: parameter missing.\n");
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "uuid_start_aliasr: parameter missing.\n");
-        return SWITCH_STATUS_SUCCESS;
-    }
-
-    switch_status_t status = SWITCH_STATUS_SUCCESS;
-    switch_core_session_t *ses = nullptr;
-    char *_appkey = nullptr;
-    char *_nlsurl = nullptr;
-    char *_asr_dec_vol = nullptr;
-    char *_savepcm = nullptr;
-//    bool        _debug = false;
-
-    switch_memory_pool_t *pool;
-    switch_core_new_memory_pool(&pool);
-    char *mycmd = switch_core_strdup(pool, cmd);
-
-    char *argv[MAX_API_ARGC];
-    memset(argv, 0, sizeof(char *) * MAX_API_ARGC);
-
-    int argc = switch_split(mycmd, ' ', argv);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
-
-    if (argc < 1) {
-        stream->write_function(stream, "uuid is required.\n");
-        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
-    }
-
-    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
-        if (argv[idx]) {
-            char *ss[2] = {0, 0};
-            int cnt = switch_split(argv[idx], '=', ss);
-            if (cnt == 2) {
-                char *var = ss[0];
-                char *val = ss[1];
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "process arg: %s = %s\n", var, val);
-                if (!strcasecmp(var, "appkey")) {
-                    _appkey = val;
-                    continue;
-                }
-                if (!strcasecmp(var, "nls")) {
-                    _nlsurl = val;
-                    continue;
-                }
-//                if (!strcasecmp(var, "debug")) {
-//                    if (!strcasecmp(val, "true")) {
-//                        _debug = true;
-//                    }
-//                    continue;
-//                }
-                if (!strcasecmp(var, "asr_dec_vol")) {
-                    _asr_dec_vol = val;
-                    continue;
-                }
-                if (!strcasecmp(var, "savepcm")) {
-                    _savepcm = val;
-                    continue;
-                }
-            }
-        }
-    }
-
-    if (!_appkey || !_nlsurl) {
-        stream->write_function(stream, "appkey and nls are required.\n");
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "appkey and nls are required.\n");
-        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
-    }
-
-    ses = switch_core_session_force_locate(argv[0]);
-    if (!ses) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "start aliasr failed, can't found session by %s\n",
-                          argv[0]);
-    } else {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "starting aliasr:%s\n",
-                          switch_channel_get_name(channel));
-
-        ali_asr_context_t *pvt;
-        if (!(pvt = (ali_asr_context_t *) switch_core_session_alloc(ses, sizeof(ali_asr_context_t)))) {
-            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
-        }
-        pvt->started = 0;
-        pvt->stopped = 0;
-        pvt->starting = 0;
-//        pvt->data_len = 0;
-        pvt->session = ses;
-        pvt->app_key = switch_core_session_strdup(pvt->session, _appkey);
-        pvt->nls_url = switch_core_session_strdup(pvt->session, _nlsurl);
-        pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(pvt->session, _asr_dec_vol) : nullptr;
-        if (pvt->asr_dec_vol) {
-            double db = atof(pvt->asr_dec_vol);
-            pvt->vol_multiplier = pow(10, db / 20);
-        }
-
-        if ((status = switch_core_new_memory_pool(&pvt->pool)) != SWITCH_STATUS_SUCCESS) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Memory Error!\n");
-            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
-        }
-        switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, pvt->pool);
-
-        switch_codec_implementation_t read_impl;
-        memset(&read_impl, 0, sizeof(switch_codec_implementation_t));
-        switch_core_session_get_read_impl(pvt->session, &read_impl);
-
-        if (read_impl.actual_samples_per_second != SAMPLE_RATE) {
-            if (switch_resample_create(&pvt->re_sampler,
-                                       read_impl.actual_samples_per_second,
-                                       SAMPLE_RATE,
-                                       8 * (read_impl.microseconds_per_packet / 1000) * 2,
-                                       SWITCH_RESAMPLE_QUALITY,
-                                       1) != SWITCH_STATUS_SUCCESS) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate re_sampler\n");
-                switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
-            }
-        }
-
-        if (_savepcm) {
-            pvt->rar_funcs = (record_replay_t*)switch_channel_get_private(channel, "record_and_replay");
-            if (pvt->rar_funcs) {
-                pvt->rar_data = pvt->rar_funcs->rar_init_func(pvt->session, &read_impl, _savepcm);
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "enable record and replay feature by %s\n", _savepcm);
-            } else {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "can't found rar_funcs, Disable record and replay feature!\n");
-            }
-        } else {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "can't found savepcm, Disable record and replay feature!\n");
-        }
-
-        //session添加media bug
-        if ((status = switch_core_media_bug_add(ses, "asr", nullptr,
-                                                asr_context, pvt, 0,
-                // SMBF_READ_REPLACE | SMBF_WRITE_REPLACE |  SMBF_NO_PAUSE | SMBF_ONE_ONLY,
-                                                SMBF_READ_STREAM | SMBF_NO_PAUSE,
-                                                &(pvt->bug))) != SWITCH_STATUS_SUCCESS) {
-            switch_goto_status(SWITCH_STATUS_SUCCESS, unlock);
-        }
-        switch_channel_set_private(channel, "asr", pvt);
-
-        if (switch_channel_add_state_handler(channel, &session_asr_handlers) < 0) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "hook channel state change failed!\n");
-        } // hook cs state change
-
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_INFO, "%s Start ASR\n",
-                          switch_channel_get_name(channel));
-        unlock:
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-
-    end:
-    switch_core_destroy_memory_pool(&pool);
-    return status;
-}
-
-// uuid_stop_aliasr <uuid>
-SWITCH_STANDARD_API(uuid_stop_aliasr_function) {
-    if (zstr(cmd)) {
-        stream->write_function(stream, "uuid_stop_aliasr: parameter missing.\n");
-        return SWITCH_STATUS_SUCCESS;
-    }
-
-    switch_status_t status = SWITCH_STATUS_SUCCESS;
-    switch_core_session_t *ses = nullptr;
-    switch_memory_pool_t *pool;
-    switch_core_new_memory_pool(&pool);
-    char *mycmd = switch_core_strdup(pool, cmd);
-
-    char *argv[1] = {0};
-    int argc = switch_split(mycmd, ' ', argv);
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", mycmd, argc);
-
-    if (argc < 1) {
-        stream->write_function(stream, "parameter number is invalid.\n");
-        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
-    }
-
-    ses = switch_core_session_force_locate(argv[0]);
-    if (!ses) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "stop aliasr failed, can't found session by %s\n",
-                          argv[0]);
-    } else {
-        ali_asr_context_t *pvt;
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
-            switch_channel_set_private(channel, "asr", nullptr);
-            switch_core_media_bug_remove(ses, &pvt->bug);
-
-            if (pvt->re_sampler) {
-                switch_resample_destroy(&pvt->re_sampler);
-            }
-            switch_mutex_destroy(pvt->mutex);
-            switch_core_destroy_memory_pool(&pvt->pool);
-
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(ses), SWITCH_LOG_DEBUG, "%s Stop ASR\n",
-                              switch_channel_get_name(channel));
-        }
-
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-
-    end:
-    switch_core_destroy_memory_pool(&pool);
-    return status;
-}
-#endif
-
 /**
  *  定义load函数，加载时运行
  */
@@ -1304,23 +844,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     *module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
-#if 0
-    // register API
-    SWITCH_ADD_API(api_interface,
-                   "uuid_start_aliasr",
-                   "uuid_start_aliasr api",
-                   uuid_start_aliasr_function,
-                   "<cmd><args>");
-
-    SWITCH_ADD_API(api_interface,
-                   "uuid_stop_aliasr",
-                   "uuid_stop_aliasr api",
-                   uuid_stop_aliasr_function,
-                   "<cmd><args>");
-    //注册终端命令自动补全
-//        switch_console_set_complete("add tasktest1 [args]");
-//        switch_console_set_complete("add tasktest2 [args]");
-#endif
 
     // register global state handlers
     switch_core_add_state_handler(&global_cs_handlers);
