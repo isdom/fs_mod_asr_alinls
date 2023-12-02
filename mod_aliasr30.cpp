@@ -21,6 +21,12 @@ std::string g_token = "";
 long g_expireTime = -1;
 bool g_debug = false;
 
+typedef struct {
+    switch_atomic_t aliasr_concurrent_cnt;
+} aliasr_global_t;
+
+aliasr_global_t *_globals;
+
 // public declare
 
 typedef void (*on_asr_started_func_t) (void *);
@@ -689,6 +695,8 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
                               read_impl->actual_samples_per_second, SAMPLE_RATE, read_impl->microseconds_per_packet);
         }
     }
+    // increment aliasr concurrent count
+    switch_atomic_inc(&_globals->aliasr_concurrent_cnt);
 
     end:
     switch_core_destroy_memory_pool(&pool);
@@ -861,6 +869,9 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
                           switch_channel_get_name(channel));
     }
 
+    // decrement aliasr concurrent count
+    switch_atomic_dec(&_globals->aliasr_concurrent_cnt);
+
     if (pvt->re_sampler) {
         switch_resample_destroy(&pvt->re_sampler);
         if (g_debug) {
@@ -877,6 +888,11 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
     }
 }
 
+SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
+    stream->write_function(stream, "\n", switch_atomic_read (&_globals->aliasr_concurrent_cnt));
+    return SWITCH_STATUS_SUCCESS;
+}
+
 /**
  *  定义load函数，加载时运行
  */
@@ -891,13 +907,21 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     }
     NlsClient::getInstance()->startWorkThread(4);
 
-//    switch_api_interface_t *api_interface = nullptr;
+    switch_api_interface_t *api_interface;
     *module_interface = switch_loadable_module_create_module_interface(pool, modname);
+
+    _globals = (aliasr_global_t *)switch_core_alloc(pool, sizeof(aliasr_global_t));
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
 
     // register global state handlers
     switch_core_add_state_handler(&global_cs_handlers);
+
+    SWITCH_ADD_API(api_interface,
+                   "aliasr_concurrent_cnt",
+                   "aliasr_concurrent_cnt api",
+                   aliasr_concurrent_cnt_function,
+                   "<cmd><args>");
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "mod_aliasr_load\n");
 
