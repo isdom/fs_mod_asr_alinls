@@ -889,7 +889,7 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
 }
 
 SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
-    stream->write_function(stream, "\n", switch_atomic_read (&_globals->aliasr_concurrent_cnt));
+    stream->write_function(stream, "%d\n", switch_atomic_read (&_globals->aliasr_concurrent_cnt));
     return SWITCH_STATUS_SUCCESS;
 }
 
