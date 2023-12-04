@@ -889,7 +889,16 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
 }
 
 SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
-    stream->write_function(stream, "%d\n", switch_atomic_read (&_globals->aliasr_concurrent_cnt));
+    const uint32_t concurrent_cnt = switch_atomic_read (&_globals->aliasr_concurrent_cnt);
+    stream->write_function(stream, "%d\n", concurrent_cnt);
+    switch_event_t *event = nullptr;
+    if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
+        event->subclass_name = strdup("aliasr_concurrent_cnt");
+        switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
+        switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Aliasr-Concurrent-Cnt", "%d", concurrent_cnt);
+        switch_event_fire(&event);
+    }
+
     return SWITCH_STATUS_SUCCESS;
 }
 
