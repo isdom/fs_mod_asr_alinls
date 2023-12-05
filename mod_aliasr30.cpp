@@ -70,6 +70,7 @@ typedef struct {
     switch_audio_resampler_t *re_sampler;
     char *app_key;
     char *nls_url;
+    char *vad_threshold;
     char *asr_dec_vol;
     float vol_multiplier;
     asr_callback_t *asr_callback;
@@ -205,35 +206,6 @@ void onAsrSentenceEnd(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
         pvt->asr_callback->on_asr_sentence_func(pvt->asr_callback->asr_caller, sentence);
         free(sentence);
     }
-#if 0
-    else {
-        switch_event_t *event = nullptr;
-        switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
-        if (ses) {
-            switch_channel_t *channel = switch_core_session_get_channel(ses);
-            if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
-                event->subclass_name = (char *) malloc(strlen("start_asr_") + strlen(asr_context->unique_id) + 1);
-                strcpy(event->subclass_name, "start_asr_");
-                strcat(event->subclass_name, asr_context->unique_id);
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", asr_context->unique_id);
-
-                char *result = dupAsrResult(cbEvent->getAllResponse());
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
-                free(result);
-
-                // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
-                //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
-                //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
-                switch_event_fire(&event);
-            }
-            // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-            //  We meet : ... Locked, Waiting on external entities
-            switch_core_session_rwunlock(ses);
-        }
-    }
-#endif
 }
 
 /**
@@ -264,32 +236,6 @@ void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, ali_asr_context_t *pvt) 
         pvt->asr_callback->on_asr_result_changed_func(pvt->asr_callback->asr_caller, result);
         free(result);
     }
-#if 0
-    else {
-        switch_event_t *event = nullptr;
-        switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
-        if (ses) {
-            switch_channel_t *channel = switch_core_session_get_channel(ses);
-            if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
-                event->subclass_name = strdup("update_asr");
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", asr_context->unique_id);
-
-                char *result = dupAsrResult(cbEvent->getAllResponse());
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", result);
-                free(result);
-                // switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Response", cbEvent->getAllResponse());
-                switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel", switch_channel_get_name(channel));
-                //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Timestamp",currtime);
-                //switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answered",answered);
-                switch_event_fire(&event);
-            }
-            // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-            //  We meet : ... Locked, Waiting on external entities
-            switch_core_session_rwunlock(ses);
-        }
-    }
-#endif
 }
 
 /**
@@ -311,21 +257,6 @@ void onAsrTranscriptionCompleted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
                           "onAsrTranscriptionCompleted: status code=%d, task id=%s\n", cbEvent->getStatusCode(),
                           cbEvent->getTaskId());
     }
-#if 0
-    ali_asr_context_t *pvt;
-    switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
-    if (ses) {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
-            //        if(pvt->frameDataBuffer){
-            //            free(pvt->frameDataBuffer);
-            //        }
-        }
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-#endif
 }
 
 /**
@@ -352,21 +283,6 @@ void onAsrTaskFailed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     switch_mutex_lock(pvt->mutex);
     pvt->started = 0;
     switch_mutex_unlock(pvt->mutex);
-#if 0
-    ali_asr_context_t *pvt;
-    switch_core_session_t *ses = switch_core_session_force_locate(asr_context->unique_id);
-    if (ses) {
-        switch_channel_t *channel = switch_core_session_get_channel(ses);
-        if ((pvt = (ali_asr_context_t *) switch_channel_get_private(channel, "asr"))) {
-            switch_mutex_lock(pvt->mutex);
-            pvt->started = 0;
-            switch_mutex_unlock(pvt->mutex);
-        }
-        // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
-        //  We meet : ... Locked, Waiting on external entities
-        switch_core_session_rwunlock(ses);
-    }
-#endif
 }
 
 /**
@@ -401,22 +317,6 @@ void onAsrChannelClosed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     if (pvt->asr_callback) {
         pvt->asr_callback->on_asr_stopped_func(pvt->asr_callback->asr_caller);
     }
-#if 0
-    else {
-        switch_event_t *event = nullptr;
-        if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
-            event->subclass_name = strdup("stop_asr");
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
-            switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "ASR-Close", cbEvent->getResult());
-            switch_event_fire(&event);
-        }
-    }
-    // release asr_context_t
-    switch_safe_free(asr_context->callee);
-    switch_safe_free(asr_context->caller);
-    switch_safe_free(asr_context->unique_id);
-    switch_safe_free(asr_context);
-#endif
 }
 
 /**
@@ -425,7 +325,7 @@ void onAsrChannelClosed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @param asr_context
  * @return SpeechTranscriberRequest* 
  */
-SpeechTranscriberRequest *generateAsrRequest(/*asr_context_t *asr_context, */ali_asr_context_t *pvt) {
+SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
     time_t now;
     time(&now);
     if (g_expireTime - now < 10) {
@@ -469,6 +369,14 @@ SpeechTranscriberRequest *generateAsrRequest(/*asr_context_t *asr_context, */ali
     request->setPunctuationPrediction(true);
     // 设置是否在后处理中添加标点, 可选参数. 默认false
     request->setInverseTextNormalization(true);
+    if (pvt->vad_threshold) {
+        request->setSemanticSentenceDetection(false);
+        // 可选参数. 静音时长超过该阈值会被认为断句,
+        // 合法参数范围200～2000(ms), 默认值800ms.
+        // vad断句与语义断句为互斥关系, 不能同时使用.
+        // 调用此设置前, 请将语义断句setSemanticSentenceDetection设置为false.
+        request->setMaxSentenceSilence(atoi(pvt->vad_threshold));
+    }
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
     request->setToken(g_token.c_str());
     if (g_debug) {
@@ -618,6 +526,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
     char *_app_key = nullptr;
     char *_nls_url = nullptr;
     char *_asr_dec_vol = nullptr;
+    char *_vad_threshold = nullptr;
 
     switch_memory_pool_t *pool;
     switch_core_new_memory_pool(&pool);
@@ -653,6 +562,10 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
                     _asr_dec_vol = val;
                     continue;
                 }
+                if (!strcasecmp(var, "vad_threshold")) {
+                    _vad_threshold = val;
+                    continue;
+                }
             }
         }
     }
@@ -668,6 +581,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
     pvt->session = session;
     pvt->app_key = switch_core_session_strdup(session, _app_key);
     pvt->nls_url = switch_core_session_strdup(session, _nls_url);
+    pvt->vad_threshold = _vad_threshold ? switch_core_session_strdup(session, _vad_threshold) : nullptr;
     pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(session, _asr_dec_vol) : nullptr;
     if (pvt->asr_dec_vol) {
         double db = atof(pvt->asr_dec_vol);
