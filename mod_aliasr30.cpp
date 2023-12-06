@@ -30,6 +30,7 @@ aliasr_global_t *_globals;
 // public declare
 
 typedef void (*on_asr_started_func_t) (void *);
+typedef void (*on_asr_sentence_begin_func_t) (void *);
 typedef void (*on_asr_sentence_func_t) (void *, const char *sentence);
 typedef void (*on_asr_result_changed_func_t) (void *, const char *result);
 typedef void (*on_asr_stopped_func_t) (void *);
@@ -37,6 +38,7 @@ typedef void (*on_asr_stopped_func_t) (void *);
 typedef struct {
     void *asr_caller;
     on_asr_started_func_t on_asr_started_func;
+    on_asr_sentence_begin_func_t on_asr_sentence_begin_func;
     on_asr_sentence_func_t on_asr_sentence_func;
     on_asr_result_changed_func_t on_asr_result_changed_func;
     on_asr_stopped_func_t on_asr_stopped_func;
@@ -159,6 +161,9 @@ void onAsrSentenceBegin(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
                           cbEvent->getTaskId(),
                           cbEvent->getSentenceIndex(),
                           cbEvent->getSentenceTime());
+    }
+    if (pvt->asr_callback) {
+        pvt->asr_callback->on_asr_sentence_begin_func(pvt->asr_callback->asr_caller);
     }
 }
 
