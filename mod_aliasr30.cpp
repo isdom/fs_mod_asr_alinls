@@ -31,7 +31,7 @@ aliasr_global_t *_globals;
 
 typedef void (*on_asr_started_func_t) (void *);
 typedef void (*on_asr_sentence_begin_func_t) (void *);
-typedef void (*on_asr_sentence_func_t) (void *, const char *sentence);
+typedef void (*on_asr_sentence_end_func_t) (void *, const char *sentence);
 typedef void (*on_asr_result_changed_func_t) (void *, const char *result);
 typedef void (*on_asr_stopped_func_t) (void *);
 
@@ -39,7 +39,7 @@ typedef struct {
     void *asr_caller;
     on_asr_started_func_t on_asr_started_func;
     on_asr_sentence_begin_func_t on_asr_sentence_begin_func;
-    on_asr_sentence_func_t on_asr_sentence_func;
+    on_asr_sentence_end_func_t on_asr_sentence_end_func;
     on_asr_result_changed_func_t on_asr_result_changed_func;
     on_asr_stopped_func_t on_asr_stopped_func;
 } asr_callback_t;
@@ -208,7 +208,7 @@ void onAsrSentenceEnd(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     }
     if (pvt->asr_callback) {
         char *sentence = dupAsrResult(cbEvent->getAllResponse());
-        pvt->asr_callback->on_asr_sentence_func(pvt->asr_callback->asr_caller, sentence);
+        pvt->asr_callback->on_asr_sentence_end_func(pvt->asr_callback->asr_caller, sentence);
         free(sentence);
     }
 }
