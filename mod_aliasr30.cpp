@@ -413,7 +413,7 @@ static void cancel_ali_asr(ali_asr_context_t *pvt);
 
 static void destroy_ali_asr(ali_asr_context_t *pvt);
 
-static const asr_provider_t g_funcs = {
+static const asr_provider_t ali_asr_provider_funcs = {
         init_ali_asr,
         reinterpret_cast<asr_start_func_t>(start_ali_asr),
         reinterpret_cast<asr_send_audio_func_t>(send_audio_to_ali_asr),
@@ -423,7 +423,7 @@ static const asr_provider_t g_funcs = {
 
 static switch_status_t attach_ali_asr_provider_on_channel_init(switch_core_session_t *session) {
     switch_channel_t *channel = switch_core_session_get_channel(session);
-    switch_channel_set_private(channel, "ali_asr", &g_funcs);
+    switch_channel_set_private(channel, "ali_asr", &ali_asr_provider_funcs);
     return SWITCH_STATUS_SUCCESS;
 }
 
