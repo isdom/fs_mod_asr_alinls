@@ -224,7 +224,6 @@ void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, ali_asr_context_t *pvt) 
     // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
     // 因此，当 onAsrTranscriptionResultChanged 调用时，确认 ali_asr_context_t * 有效
 
-//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionResultChanged: %s\n", asr_context->unique_id);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                           "onAsrTranscriptionResultChanged: status code=%d, task id=%s, index=%d, time=%d, result=%s\n",
