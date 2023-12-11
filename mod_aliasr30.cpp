@@ -426,7 +426,7 @@ static switch_status_t attach_ali_asr_provider_on_channel_init(switch_core_sessi
     return SWITCH_STATUS_SUCCESS;
 }
 
-switch_state_handler_table_t global_cs_handlers = {
+switch_state_handler_table_t ali_asr_cs_handlers = {
         /*! executed when the state changes to init */
         // switch_state_handler_t on_init;
         attach_ali_asr_provider_on_channel_init,
@@ -842,7 +842,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
 
     // register global state handlers
-    switch_core_add_state_handler(&global_cs_handlers);
+    switch_core_add_state_handler(&ali_asr_cs_handlers);
 
     SWITCH_ADD_API(api_interface,
                    "aliasr_concurrent_cnt",
@@ -860,7 +860,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown) {
 
     // unregister global state handlers
-    switch_core_remove_state_handler(&global_cs_handlers);
+    switch_core_remove_state_handler(&ali_asr_cs_handlers);
 
     NlsClient::releaseInstance();
 
