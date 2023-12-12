@@ -5,7 +5,6 @@
 #include "speechTranscriberRequest.h"
 #include "nlsCommonSdk/Token.h"
 
-#define MAX_FRAME_BUFFER_SIZE (1024*1024) //1MB
 #define SAMPLE_RATE 8000
 
 using namespace AlibabaNlsCommon;
