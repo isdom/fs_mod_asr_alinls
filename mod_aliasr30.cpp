@@ -22,9 +22,9 @@ bool g_debug = false;
 
 typedef struct {
     switch_atomic_t aliasr_concurrent_cnt;
-} aliasr_global_t;
+} ali_asr_global_t;
 
-aliasr_global_t *aliasr_globals;
+ali_asr_global_t *ali_asr_globals;
 
 // public declare
 
@@ -613,7 +613,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
         }
     }
     // increment aliasr concurrent count
-    switch_atomic_inc(&aliasr_globals->aliasr_concurrent_cnt);
+    switch_atomic_inc(&ali_asr_globals->aliasr_concurrent_cnt);
 
     end:
     switch_core_destroy_memory_pool(&pool);
@@ -787,7 +787,7 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
     }
 
     // decrement aliasr concurrent count
-    switch_atomic_dec(&aliasr_globals->aliasr_concurrent_cnt);
+    switch_atomic_dec(&ali_asr_globals->aliasr_concurrent_cnt);
 
     if (pvt->re_sampler) {
         switch_resample_destroy(&pvt->re_sampler);
@@ -806,7 +806,7 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
 }
 
 SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
-    const uint32_t concurrent_cnt = switch_atomic_read (&aliasr_globals->aliasr_concurrent_cnt);
+    const uint32_t concurrent_cnt = switch_atomic_read (&ali_asr_globals->aliasr_concurrent_cnt);
     stream->write_function(stream, "%d\n", concurrent_cnt);
     switch_event_t *event = nullptr;
     if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
@@ -836,7 +836,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     switch_api_interface_t *api_interface;
     *module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
-    aliasr_globals = (aliasr_global_t *)switch_core_alloc(pool, sizeof(aliasr_global_t));
+    ali_asr_globals = (ali_asr_global_t *)switch_core_alloc(pool, sizeof(ali_asr_global_t));
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "mod_aliasr_load start\n");
 
