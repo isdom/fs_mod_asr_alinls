@@ -810,7 +810,7 @@ SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
     stream->write_function(stream, "%d\n", concurrent_cnt);
     switch_event_t *event = nullptr;
     if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
-        event->subclass_name = strdup("ali_asr_concurrent_cnt");
+        event->subclass_name = strdup("aliasr_concurrent_cnt");
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
         switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Aliasr-Concurrent-Cnt", "%d", concurrent_cnt);
         switch_event_fire(&event);
@@ -844,8 +844,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     switch_core_add_state_handler(&ali_asr_cs_handlers);
 
     SWITCH_ADD_API(api_interface,
-                   "ali_asr_concurrent_cnt",
-                   "ali_asr_concurrent_cnt api",
+                   "aliasr_concurrent_cnt",
+                   "aliasr_concurrent_cnt api",
                    aliasr_concurrent_cnt_function,
                    "<cmd><args>");
 
