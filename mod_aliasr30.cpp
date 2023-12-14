@@ -21,7 +21,7 @@ long g_expireTime = -1;
 bool g_debug = false;
 
 typedef struct {
-    switch_atomic_t aliasr_concurrent_cnt;
+    switch_atomic_t ali_asr_concurrent_cnt;
 } ali_asr_global_t;
 
 ali_asr_global_t *ali_asr_globals;
@@ -613,7 +613,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
         }
     }
     // increment aliasr concurrent count
-    switch_atomic_inc(&ali_asr_globals->aliasr_concurrent_cnt);
+    switch_atomic_inc(&ali_asr_globals->ali_asr_concurrent_cnt);
 
     end:
     switch_core_destroy_memory_pool(&pool);
@@ -787,7 +787,7 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
     }
 
     // decrement aliasr concurrent count
-    switch_atomic_dec(&ali_asr_globals->aliasr_concurrent_cnt);
+    switch_atomic_dec(&ali_asr_globals->ali_asr_concurrent_cnt);
 
     if (pvt->re_sampler) {
         switch_resample_destroy(&pvt->re_sampler);
@@ -806,11 +806,11 @@ static void destroy_ali_asr(ali_asr_context_t *pvt) {
 }
 
 SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
-    const uint32_t concurrent_cnt = switch_atomic_read (&ali_asr_globals->aliasr_concurrent_cnt);
+    const uint32_t concurrent_cnt = switch_atomic_read (&ali_asr_globals->ali_asr_concurrent_cnt);
     stream->write_function(stream, "%d\n", concurrent_cnt);
     switch_event_t *event = nullptr;
     if (switch_event_create(&event, SWITCH_EVENT_CUSTOM) == SWITCH_STATUS_SUCCESS) {
-        event->subclass_name = strdup("aliasr_concurrent_cnt");
+        event->subclass_name = strdup("ali_asr_concurrent_cnt");
         switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Event-Subclass", event->subclass_name);
         switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Aliasr-Concurrent-Cnt", "%d", concurrent_cnt);
         switch_event_fire(&event);
@@ -844,8 +844,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     switch_core_add_state_handler(&ali_asr_cs_handlers);
 
     SWITCH_ADD_API(api_interface,
-                   "aliasr_concurrent_cnt",
-                   "aliasr_concurrent_cnt api",
+                   "ali_asr_concurrent_cnt",
+                   "ali_asr_concurrent_cnt api",
                    aliasr_concurrent_cnt_function,
                    "<cmd><args>");
 
