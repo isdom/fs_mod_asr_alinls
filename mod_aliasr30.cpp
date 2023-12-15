@@ -115,14 +115,13 @@ int generateToken(const char *akId, const char *akSecret, std::string *token, lo
  * 
  * @brief 调用start(), 成功与云端建立连接, sdk内部线程上报started事件
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
- * @param asr_context 回调自定义参数，默认为 nullptr, 可以根据需求自定义参数
+ * @param ali_asr_context_t 回调自定义参数，默认为 nullptr, 可以根据需求自定义参数
  */
 void onAsrTranscriptionStarted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
     // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
     // 因此，当 onAsrTranscriptionStarted 调用时，确认 ali_asr_context_t * 有效
 
-//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: %s\n", asr_context->unique_id);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionStarted: status code=%d, task id=%s\n",
                           cbEvent->getStatusCode(), cbEvent->getTaskId());
@@ -145,14 +144,13 @@ void onAsrTranscriptionStarted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
 /**
  * @brief 服务端检测到了一句话的开始, sdk内部线程上报SentenceBegin事件
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
- * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @param ali_asr_context_t 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
 void onAsrSentenceBegin(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
     // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
     // 因此，当 onAsrSentenceBegin 调用时，确认 ali_asr_context_t * 有效
 
-//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceBegin: %s\n", asr_context->unique_id);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                           "onAsrSentenceBegin: status code=%d, task id=%s, index=%d, time=%d\n",
@@ -185,14 +183,13 @@ char *dupAsrResult(const char *allResponse) {
 /**
  * @brief 服务端检测到了一句话结束, sdk内部线程上报SentenceEnd事件
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
- * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @param ali_asr_context_t 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
 void onAsrSentenceEnd(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
     // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
     // 因此，当 onAsrSentenceEnd 调用时，确认 ali_asr_context_t * 有效
 
-//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceEnd: %s\n", asr_context->unique_id);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                           "onAsrSentenceEnd: status code=%d, task id=%s, index=%d, time=%d, begin_time=%d, result=%s\n",
@@ -216,7 +213,7 @@ void onAsrSentenceEnd(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @brief 识别结果发生了变化, sdk在接收到云端返回到最新结果时,
  *        sdk内部线程上报ResultChanged事件
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
- * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @param ali_asr_context_t 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  */
 void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
@@ -246,7 +243,7 @@ void onAsrTranscriptionResultChanged(NlsEvent *cbEvent, ali_asr_context_t *pvt) 
  * @note 上报Completed事件之后，SDK内部会关闭识别连接通道.
          此时调用sendAudio会返回负值, 请停止发送.
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
- * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @param ali_asr_context_t 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  * @return
  */
 void onAsrTranscriptionCompleted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
@@ -254,7 +251,6 @@ void onAsrTranscriptionCompleted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
     // 因此，当 onAsrTranscriptionCompleted 调用时，确认 ali_asr_context_t * 有效
 
-//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTranscriptionCompleted: %s\n", asr_context->unique_id);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                           "onAsrTranscriptionCompleted: status code=%d, task id=%s\n", cbEvent->getStatusCode(),
@@ -266,7 +262,7 @@ void onAsrTranscriptionCompleted(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @brief 识别过程(包含start(), sendAudio(), stop())发生异常时, sdk内部线程上报TaskFailed事件
  * @note 上报TaskFailed事件之后, SDK内部会关闭识别连接通道. 此时调用sendAudio会返回负值, 请停止发送
  * @param cbEvent 回调事件结构, 详见nlsEvent.h
- * @param asr_context 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @param ali_asr_context_t 回调自定义参数，默认为NULL, 可以根据需求自定义参数
  * @return
  */
 void onAsrTaskFailed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
@@ -274,7 +270,6 @@ void onAsrTaskFailed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
     // 因此，当 onAsrTaskFailed 调用时，确认 ali_asr_context_t * 有效
 
-//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrTaskFailed: %s\n", asr_context->unique_id);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                           "onAsrTaskFailed: status code=%d, task id=%s, error message=%s\n", cbEvent->getStatusCode(),
@@ -292,14 +287,13 @@ void onAsrTaskFailed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @brief 二次结果返回回调函数, 开启enable_nlp后返回
  * 
  * @param cbEvent 
- * @param asr_context
+ * @param ali_asr_context_t
  */
 void onAsrSentenceSemantics(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
     // cancel_and_release_ali_asr_on_channel_destroy 回调中，会调用 cancel_ali_asr 来确保 session 结束后，
     // 不会有任何 ASR 事件上报（SpeechTranscriberRequest.cancel: 直接关闭实时音频流识别过程,调用 cancel 之后不会再上报任何回调事件）
     // 因此，当 onAsrSentenceSemantics 调用时，确认 ali_asr_context_t * 有效
 
-//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceSemantics: %s\n", asr_context->unique_id);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onAsrSentenceSemantics: all response=%s\n",
                           cbEvent->getAllResponse());
