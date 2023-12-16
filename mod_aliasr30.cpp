@@ -503,15 +503,15 @@ static switch_status_t load_config(switch_memory_pool_t *pool) {
     return SWITCH_STATUS_SUCCESS;
 }
 
-static void adjustVolume(int16_t *pcm, size_t pcmlen, float vol_multiplier) {
-    int32_t pcmval;
-    for (size_t ctr = 0; ctr < pcmlen; ctr++) {
-        pcmval = pcm[ctr] * vol_multiplier;
-        if (pcmval < 32767 && pcmval > -32768) {
-            pcm[ctr] = pcmval;
-        } else if (pcmval > 32767) {
+static void adjustVolume(int16_t *pcm, size_t pcm_len, float vol_multiplier) {
+    int32_t pcm_val;
+    for (size_t ctr = 0; ctr < pcm_len; ctr++) {
+        pcm_val = pcm[ctr] * vol_multiplier;
+        if (pcm_val < 32767 && pcm_val > -32768) {
+            pcm[ctr] = (int16_t)pcm_val;
+        } else if (pcm_val > 32767) {
             pcm[ctr] = 32767;
-        } else if (pcmval < -32768) {
+        } else if (pcm_val < -32768) {
             pcm[ctr] = -32768;
         }
     }
