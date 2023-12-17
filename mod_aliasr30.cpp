@@ -10,7 +10,6 @@
 using namespace AlibabaNlsCommon;
 using AlibabaNls::NlsClient;
 using AlibabaNls::NlsEvent;
-using AlibabaNls::LogDebug;
 using AlibabaNls::SpeechTranscriberRequest;
 
 
@@ -820,7 +819,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     if (load_config(pool) != SWITCH_STATUS_SUCCESS) {
         return SWITCH_STATUS_FALSE;
     }
-    int ret = NlsClient::getInstance()->setLogConfig("log-transcriber", LogDebug);
+    int ret = NlsClient::getInstance()->setLogConfig("log-transcriber", AlibabaNls::LogDebug);
     if (-1 == ret) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "set log failed\n");
         return SWITCH_STATUS_FALSE;
