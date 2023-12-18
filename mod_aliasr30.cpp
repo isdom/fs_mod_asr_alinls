@@ -717,7 +717,7 @@ static void stop_ali_asr(ali_asr_context_t *pvt) {
                               switch_channel_get_name(channel));
         }
         pvt->request->stop();
-        //7: 识别结束, 释放request对象
+        // ASR 识别结束, 释放 request 对象
         NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
         pvt->request = nullptr;
         if (g_debug) {
