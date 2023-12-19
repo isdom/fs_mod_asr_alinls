@@ -812,6 +812,25 @@ SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
     return SWITCH_STATUS_SUCCESS;
 }
 
+#define ALIASR_DEBUG_SYNTAX "<on|off>"
+SWITCH_STANDARD_API(mod_aliasr_debug)
+{
+    if (zstr(cmd)) {
+        stream->write_function(stream, "-USAGE: %s\n", ALIASR_DEBUG_SYNTAX);
+    } else {
+        if (!strcasecmp(cmd, "on")) {
+            g_debug = true;
+            stream->write_function(stream, "Aliasr Debug: on\n");
+        } else if (!strcasecmp(cmd, "off")) {
+            g_debug = false;
+            stream->write_function(stream, "Aliasr Debug: off\n");
+        } else {
+            stream->write_function(stream, "-USAGE: %s\n", ALIASR_DEBUG_SYNTAX);
+        }
+    }
+    return SWITCH_STATUS_SUCCESS;
+}
+
 /**
  *  定义load函数，加载时运行
  */
@@ -841,6 +860,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
                    "aliasr_concurrent_cnt api",
                    aliasr_concurrent_cnt_function,
                    "<cmd><args>");
+
+    SWITCH_ADD_API(api_interface, "aliasr_debug", "Set aliasr debug", mod_aliasr_debug, ALIASR_DEBUG_SYNTAX);
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "mod_aliasr_load\n");
 
