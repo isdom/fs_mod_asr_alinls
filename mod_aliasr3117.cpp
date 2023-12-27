@@ -331,7 +331,7 @@ SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
             return nullptr;
         }
     }
-    SpeechTranscriberRequest *request = NlsClient::getInstance()->createTranscriberRequest();
+    SpeechTranscriberRequest *request = NlsClient::getInstance()->createTranscriberRequest("cpp", false);
     if (request == nullptr) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "createTranscriberRequest failed.\n");
         return nullptr;
@@ -354,6 +354,7 @@ SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
     //设置二次结果返回回调函数, 开启enable_nlp后返回
     request->setAppKey(pvt->app_key);
     // 设置AppKey, 必填参数, 请参照官网申请
+    request->setTimeout(500);
 
     // 使缺省用 url
     // request->setUrl(pvt->nls_url);
@@ -644,6 +645,7 @@ static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) 
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init SpeechTranscriberRequest.%s\n",
                                   switch_channel_get_name(channel));
             }
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start step1 %s\n", switch_channel_get_name(channel));
             if (pvt->request->start() < 0) {
                 pvt->stopped = 1;
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
@@ -653,7 +655,12 @@ static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) 
                 pvt->request = nullptr;
                 ret_val = false;
                 goto unlock;
+            } else {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+                                  "start() ok for %s\n",
+                                  switch_channel_get_name(channel));
             }
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start step2 %s\n", switch_channel_get_name(channel));
             ret_val = true;
         }
     }
@@ -681,18 +688,22 @@ static bool send_audio_to_ali_asr(ali_asr_context_t *pvt, void *data, uint32_t d
         if (pvt->asr_dec_vol) {
             adjustVolume((int16_t *) data, (size_t) data_len / 2, pvt->vol_multiplier);
         }
-        if (pvt->request->sendAudio((uint8_t*)data, (size_t) data_len) < 0) {
-            pvt->stopped = 1;
-            // 直接关闭实时音频流识别过程,调用cancel之后不会再上报任何回调事件
-            pvt->request->cancel();
-            // 释放request对象
-            NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
-            pvt->request = nullptr;
-            switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "cancel asr bcs of send audio failed -> on channel: %s\n",
-                              switch_channel_get_name(channel));
-            ret_val = false;
-            goto unlock;
+        if (pvt->started) {
+            if (pvt->request->sendAudio((uint8_t*)data, (size_t) data_len) < 0) {
+                pvt->stopped = 1;
+                // 直接关闭实时音频流识别过程,调用cancel之后不会再上报任何回调事件
+                pvt->request->cancel();
+                // 释放request对象
+                NlsClient::getInstance()->releaseTranscriberRequest(pvt->request);
+                pvt->request = nullptr;
+                switch_channel_t *channel = switch_core_session_get_channel(pvt->session);
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "cancel asr bcs of send audio failed -> on channel: %s\n",
+                                  switch_channel_get_name(channel));
+                ret_val = false;
+                goto unlock;
+            }
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "send_audio_to_ali_asr: aliasr starting, ignore send audio\n");
         }
         ret_val = true;
         if (g_debug) {
@@ -841,12 +852,14 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     if (load_config(pool) != SWITCH_STATUS_SUCCESS) {
         return SWITCH_STATUS_FALSE;
     }
-    int ret = NlsClient::getInstance()->setLogConfig("log-transcriber", AlibabaNls::LogDebug);
+    int ret = AlibabaNls::NlsClient::getInstance()->setLogConfig(
+            "/usr/local/freeswitch/log/nls-transcriber", AlibabaNls::LogDebug, 400, 50);
     if (-1 == ret) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "set log failed\n");
         return SWITCH_STATUS_FALSE;
     }
     NlsClient::getInstance()->startWorkThread(4);
+
 
     switch_api_interface_t *api_interface;
     *module_interface = switch_loadable_module_create_module_interface(pool, modname);
