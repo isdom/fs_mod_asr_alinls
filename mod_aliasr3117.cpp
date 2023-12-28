@@ -645,7 +645,6 @@ static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) 
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Init SpeechTranscriberRequest.%s\n",
                                   switch_channel_get_name(channel));
             }
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start step1 %s\n", switch_channel_get_name(channel));
             if (pvt->request->start() < 0) {
                 pvt->stopped = 1;
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
@@ -656,11 +655,9 @@ static bool start_ali_asr(ali_asr_context_t *pvt, asr_callback_t *asr_callback) 
                 ret_val = false;
                 goto unlock;
             } else {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                                  "start() ok for %s\n",
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start() success for %s\n",
                                   switch_channel_get_name(channel));
             }
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start step2 %s\n", switch_channel_get_name(channel));
             ret_val = true;
         }
     }
@@ -824,6 +821,64 @@ SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
     }
 
     return SWITCH_STATUS_SUCCESS;
+}
+
+// uuid_alitts <uuid> text=XXXXX saveto=<path>
+SWITCH_STANDARD_API(uuid_alitts_function) {
+    if (zstr(cmd)) {
+        stream->write_function(stream, "uuid_alitts: parameter missing.\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "uuid_alitts: parameter missing.\n");
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    switch_status_t status = SWITCH_STATUS_SUCCESS;
+    switch_core_session_t *ses = nullptr;
+    char *_text = nullptr;
+    char *_saveto = nullptr;
+
+    switch_memory_pool_t *pool;
+    switch_core_new_memory_pool(&pool);
+    char *my_cmd = switch_core_strdup(pool, cmd);
+
+    char *argv[MAX_API_ARGC];
+    memset(argv, 0, sizeof(char *) * MAX_API_ARGC);
+
+    int argc = switch_split(my_cmd, ' ', argv);
+    if (g_debug) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "cmd:%s, args count: %d\n", my_cmd, argc);
+    }
+
+    if (argc < 1) {
+        stream->write_function(stream, "uuid is required.\n");
+        switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+    }
+
+    for (int idx = 1; idx < MAX_API_ARGC; idx++) {
+        if (argv[idx]) {
+            char *ss[2] = {nullptr, nullptr};
+            int cnt = switch_split(argv[idx], '=', ss);
+            if (cnt == 2) {
+                char *var = ss[0];
+                char *val = ss[1];
+                if (g_debug) {
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "process arg: %s = %s\n", var, val);
+                }
+                if (!strcasecmp(var, "text")) {
+                    _text = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "saveto")) {
+                    _saveto = val;
+                    continue;
+                }
+            }
+        }
+    }
+
+
+    end:
+    switch_core_destroy_memory_pool(&pool);
+    return status;
 }
 
 #define ALIASR_DEBUG_SYNTAX "<on|off>"
