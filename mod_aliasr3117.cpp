@@ -1,8 +1,10 @@
 #include <switch.h>
 #include <cmath>
+#include <sys/time.h>
 #include "nlsClient.h"
 #include "nlsEvent.h"
 #include "speechTranscriberRequest.h"
+#include "speechSynthesizerRequest.h"
 #include "nlsToken.h"
 
 #define SAMPLE_RATE 8000
@@ -823,7 +825,161 @@ SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
     return SWITCH_STATUS_SUCCESS;
 }
 
-// uuid_alitts <uuid> text=XXXXX saveto=<path>
+// ====================================================== TTS ======================================================
+
+typedef struct {
+    const char *_save_path;
+    const char *_format;
+    pthread_mutex_t mtxWord;
+    pthread_cond_t cvWord;
+} ali_tts_context_t;
+
+typedef void (*tts_callback_func_t)(NlsEvent *, void *);
+
+std::string timestamp_str() {
+    char buf[64];
+    struct timeval tv = {0};
+    struct tm ltm = {0};
+
+    gettimeofday(&tv, nullptr);
+    localtime_r(&tv.tv_sec, &ltm);
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d.%06ld",
+             ltm.tm_year + 1900, ltm.tm_mon + 1, ltm.tm_mday,
+             ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
+             tv.tv_usec);
+    buf[63] = '\0';
+    std::string tmp = buf;
+    return tmp;
+}
+
+/**
+ * @brief sdk在接收到云端返回合成结束消息时, sdk内部线程上报Completed事件
+ * @note 上报Completed事件之后，SDK内部会关闭识别连接通道.
+ * @param cbEvent 回调事件结构, 详见nlsEvent.h
+ * @param cbParam 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @return
+ */
+void OnSynthesisCompleted(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
+    std::string ts = timestamp_str();
+    if (g_debug) {
+        // 获取消息的状态码，成功为0或者20000000，失败时对应失败的错误码
+        // 当前任务的task id，方便定位问题，建议输出
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnSynthesisCompleted: %s status code=%d, task id=%s\n",
+                          ts.c_str(), cbEvent->getStatusCode(), cbEvent->getTaskId());
+    }
+}
+
+/**
+ * @brief 合成过程发生异常时, sdk内部线程上报TaskFailed事件
+ * @note 上报TaskFailed事件之后，SDK内部会关闭识别连接通道.
+ * @param cbEvent 回调事件结构, 详见nlsEvent.h
+ * @param cbParam 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @return
+ */
+void OnSynthesisTaskFailed(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
+    /*
+    FILE *failed_stream = fopen("synthesisTaskFailed.log", "a+");
+    if (failed_stream) {
+        std::string ts = timestamp_str();
+        char outbuf[1024] = {0};
+        snprintf(outbuf, sizeof(outbuf),
+                 "%s status code:%d task id:%s error mesg:%s\n",
+                 ts.c_str(),
+                 cbEvent->getStatusCode(),
+                 cbEvent->getTaskId(),
+                 cbEvent->getErrorMessage()
+        );
+        fwrite(outbuf, strlen(outbuf), 1, failed_stream);
+        fclose(failed_stream);
+    }
+     */
+
+
+    if (g_debug) {
+        // 获取消息的状态码，成功为0或者20000000，失败时对应失败的错误码
+        // 当前任务的task id，方便定位问题，建议输出
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnSynthesisTaskFailed:status code=%d, task id=%s, error message: %s\n",
+                          cbEvent->getStatusCode(), cbEvent->getTaskId(), cbEvent->getErrorMessage());
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnSynthesisTaskFailed: All response: %s\n",
+                          cbEvent->getAllResponse());
+    }
+}
+
+/**
+ * @brief 识别结束或发生异常时，会关闭连接通道, sdk内部线程上报ChannelCloseed事件
+ * @param cbEvent 回调事件结构, 详见nlsEvent.h
+ * @param cbParam 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @return
+ */
+void OnSynthesisChannelClosed(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
+    std::string ts = timestamp_str();
+    if (g_debug) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnSynthesisChannelClosed: %s, All response: %s\n",
+                          ts.c_str(), cbEvent->getAllResponse());
+    }
+
+    if (pvt) {
+        //通知发送线程, 最终识别结果已经返回, 可以调用stop()
+        pthread_mutex_lock(&(pvt->mtxWord));
+        pthread_cond_signal(&(pvt->cvWord));
+        pthread_mutex_unlock(&(pvt->mtxWord));
+    }
+}
+
+/**
+ * @brief 文本上报服务端之后, 收到服务端返回的二进制音频数据, SDK内部线程通过BinaryDataRecved事件上报给用户
+ * @param cbEvent 回调事件结构, 详见nlsEvent.h
+ * @param cbParam 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @return
+ * @notice 此处切记不可做block操作,只可做音频数据转存. 若在此回调中做过多操作,
+ *         会阻塞后续的数据回调和completed事件回调.
+ */
+void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
+    std::vector<unsigned char> data = cbEvent->getBinaryData(); // getBinaryData() 获取文本合成的二进制音频数据
+
+    if (data.size() > 0) {
+        // 以追加形式将二进制音频数据写入文件
+        std::string dir = pvt->_save_path;
+        if (access(dir.c_str(), 0) == -1) {
+            mkdir(dir.c_str(), S_IRWXU);
+        }
+        char file_name[256] = {0};
+        snprintf(file_name, 256, "%s/%s.%s", dir.c_str(), cbEvent->getTaskId(), pvt->_format);
+        FILE* tts_stream = fopen(file_name, "a+");
+        if (tts_stream) {
+            fwrite((char*)&data[0], data.size(), 1, tts_stream);
+            fclose(tts_stream);
+        }
+    }
+}
+
+/**
+ * @brief 返回 tts 文本对应的日志信息，增量返回对应的字幕信息
+ * @param cbEvent 回调事件结构, 详见nlsEvent.h
+ * @param cbParam 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @return
+*/
+void OnMetaInfo(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
+    if (g_debug) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnMetaInfo: All response: %s\n",
+                          cbEvent->getAllResponse());
+    }
+}
+
+/**
+ * @brief 服务端返回的所有信息会通过此回调反馈,
+ * @param cbEvent 回调事件结构, 详见nlsEvent.h
+ * @param cbParam 回调自定义参数，默认为NULL, 可以根据需求自定义参数
+ * @return
+*/
+void onMessage(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
+    if (g_debug) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "onMessage: All response: %s\n",
+                          cbEvent->getAllResponse());
+    }
+}
+
+// uuid_alitts <uuid> text=XXXXX saveto=<path> appkey=<key> url=<url>
 SWITCH_STANDARD_API(uuid_alitts_function) {
     if (zstr(cmd)) {
         stream->write_function(stream, "uuid_alitts: parameter missing.\n");
@@ -835,6 +991,9 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
     switch_core_session_t *ses = nullptr;
     char *_text = nullptr;
     char *_saveto = nullptr;
+    char *_app_key = nullptr;
+    char *_url = nullptr;
+
 
     switch_memory_pool_t *pool;
     switch_core_new_memory_pool(&pool);
@@ -871,12 +1030,179 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
                     _saveto = val;
                     continue;
                 }
+                if (!strcasecmp(var, "appkey")) {
+                    _app_key = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "url")) {
+                    _url = val;
+                    continue;
+                }
             }
         }
     }
 
+    {
+        time_t now;
+        time(&now);
+        if (g_expireTime - now < 10) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+                              "uuid_alitts: the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret\n");
+            if (-1 == generateToken(g_ak_id, g_ak_secret, &g_token, &g_expireTime)) {
+                switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+            }
+        }
 
-    end:
+        /*
+         * 1. 创建语音识别SpeechSynthesizerRequest对象.
+         *
+         * 默认为实时短文本语音合成请求, 支持一次性合成300字符以内的文字,
+         * 其中1个汉字、1个英文字母或1个标点均算作1个字符,
+         * 超过300个字符的内容将会报错(或者截断).
+         * 一次性合成超过300字符可考虑长文本语音合成功能.
+         *
+         * 实时短文本语音合成文档详见: https://help.aliyun.com/document_detail/84435.html
+         * 长文本语音合成文档详见: https://help.aliyun.com/document_detail/130509.html
+         */
+        int chars_cnt = AlibabaNls::NlsClient::getInstance()->calculateUtf8Chars(_text);
+        if (g_debug) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " this text contains %d chars\n", chars_cnt);
+        }
+
+        AlibabaNls::SpeechSynthesizerRequest* request = nullptr;
+        if (chars_cnt > 300) {
+            // 长文本语音合成
+            request = AlibabaNls::NlsClient::getInstance()->createSynthesizerRequest(AlibabaNls::LongTts);
+        } else {
+            // 短文本语音合成
+            request = AlibabaNls::NlsClient::getInstance()->createSynthesizerRequest();
+        }
+        if (request == nullptr) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "createSynthesizerRequest failed.\n");
+            switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+        }
+
+        /*
+         * 2. 设置用于接收结果的回调
+         */
+        // 设置音频合成结束回调函数
+        ali_tts_context_t pvt = {0};
+
+        pvt._save_path = _saveto;
+        pvt._format = "wav";
+        pthread_mutex_init(&pvt.mtxWord, nullptr);
+        pthread_cond_init(&pvt.cvWord, nullptr);
+
+        request->setOnSynthesisCompleted(reinterpret_cast<tts_callback_func_t>(OnSynthesisCompleted), &pvt);
+        // 设置音频合成通道关闭回调函数
+        request->setOnChannelClosed(reinterpret_cast<tts_callback_func_t>(OnSynthesisChannelClosed), &pvt);
+        // 设置异常失败回调函数
+        request->setOnTaskFailed(reinterpret_cast<tts_callback_func_t>(OnSynthesisTaskFailed), &pvt);
+        // 设置文本音频数据接收回调函数
+        request->setOnBinaryDataReceived(reinterpret_cast<tts_callback_func_t>(OnBinaryDataRecved), &pvt);
+        // 设置字幕信息
+        request->setOnMetaInfo(reinterpret_cast<tts_callback_func_t>(OnMetaInfo), &pvt);
+        // 设置所有服务端返回信息回调函数
+        //request->setOnMessage(onMessage, &cbParam);
+        // 开启所有服务端返回信息回调函数, 其他回调(除了OnBinaryDataRecved)失效
+        //request->setEnableOnMessage(true);
+
+        /*
+         * 3. 设置request的相关参数
+         */
+        // 设置待合成文本, 必填参数. 文本内容必须为UTF-8编码
+        // 一次性合成超过300字符可考虑长文本语音合成功能.
+        // 长文本语音合成文档详见: https://help.aliyun.com/document_detail/130509.html
+        request->setText(_text);
+        // 发音人, 包含"xiaoyun", "ruoxi", "xiaogang"等. 可选参数, 默认是xiaoyun
+        request->setVoice("siqi");
+        // 访问个性化音色，访问的Voice必须是个人定制音色
+        //request->setPayloadParam("{\"enable_ptts\":true}");
+        // 音量, 范围是0~100, 可选参数, 默认50
+        request->setVolume(50);
+        // 音频编码格式, 可选参数, 默认是wav. 支持的格式pcm, wav, mp3
+        request->setFormat("wav");
+        // 音频采样率, 包含8000, 16000. 可选参数, 默认是16000
+        request->setSampleRate(16000);
+        // 语速, 范围是-500~500, 可选参数, 默认是0
+        request->setSpeechRate(0);
+        // 语调, 范围是-500~500, 可选参数, 默认是0
+        request->setPitchRate(0);
+        // 开启字幕
+        request->setEnableSubtitle(true);
+
+        // 设置AppKey, 必填参数, 请参照官网申请
+        request->setAppKey(_app_key);
+        // 设置账号校验token, 必填参数
+        request->setToken(g_token.c_str());
+
+        if (_url != nullptr) {
+            request->setUrl(_url);
+        }
+        // 设置链接超时500ms
+        request->setTimeout(500);
+        // 获取返回文本的编码格式
+        const char* output_format = request->getOutputFormat();
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "text format: %s\n", output_format);
+
+        /*
+         * 4. start()为异步操作。成功则开始返回BinaryRecv事件。失败返回TaskFailed事件。
+         */
+        int ret = request->start();
+        if (ret < 0) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "start failed.\n");
+            // start()失败，释放request对象
+            AlibabaNls::NlsClient::getInstance()->releaseSynthesizerRequest(request);
+            switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "start success.\n");
+        }
+        /*
+         * 5. start成功，开始等待接收完所有合成数据。
+         *    stop()为无意义接口，调用与否都会跑完全程.
+         *    cancel()立即停止工作, 且不会有回调返回, 失败返回TaskFailed事件。
+         */
+//    ret = request->cancel();
+        ret = request->stop();  // always return 0
+
+        /*
+         * 开始等待接收完所有合成数据。
+         */
+        struct timeval tv_now = {0};
+        struct timespec tv_outtime = {0};
+        if (ret == 0) {
+            gettimeofday(&tv_now, nullptr);
+            if (g_debug) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "wait closed callback: tv %ld\n", tv_now.tv_sec);
+            }
+            /*
+             * 根据文本长短、接收速度和网络环境，接收完所有合成数据的时间无法确定，
+             * 这里设定30s超时只是展示一种超时机制。
+             */
+            tv_outtime.tv_sec = tv_now.tv_sec + 30;
+            tv_outtime.tv_nsec = tv_now.tv_usec * 1000;
+            // 等待closed事件后再进行释放, 否则会出现崩溃
+            pthread_mutex_lock(&(pvt.mtxWord));
+            if (ETIMEDOUT == pthread_cond_timedwait(&(pvt.cvWord), &(pvt.mtxWord), &tv_outtime)) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "synthesis timeout.\n");
+            }
+            pthread_mutex_unlock(&(pvt.mtxWord));
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "stop return value : %d.\n", ret);
+        }
+        gettimeofday(&tv_now, nullptr);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "current request task_id: %s, stop finished, tv: %ld\n",
+                          request->getTaskId(), tv_now.tv_sec);
+
+        /*
+         * 6. 完成所有工作后释放当前请求。
+         *    请在closed事件(确定完成所有工作)后再释放, 否则容易破坏内部状态机, 会强制卸载正在运行的请求。
+         */
+        AlibabaNls::NlsClient::getInstance()->releaseSynthesizerRequest(request);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "release Synthesizer success.\n");
+    }
+
+end:
     switch_core_destroy_memory_pool(&pool);
     return status;
 }
@@ -933,6 +1259,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
                    "<cmd><args>");
 
     SWITCH_ADD_API(api_interface, "aliasr_debug", "Set aliasr debug", mod_aliasr_debug, ALIASR_DEBUG_SYNTAX);
+
+    SWITCH_ADD_API(api_interface, "uuid_alitts", "Invoke Ali TTS", uuid_alitts_function, "<uuid> text=XXXXX saveto=<path> appkey=<key>");
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "mod_aliasr_load\n");
 
