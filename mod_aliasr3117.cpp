@@ -1,6 +1,8 @@
 #include <switch.h>
 #include <cmath>
 #include <sys/time.h>
+#include <iostream>
+#include <sstream>
 #include "nlsClient.h"
 #include "nlsEvent.h"
 #include "speechTranscriberRequest.h"
@@ -979,6 +981,80 @@ void onMessage(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
     }
 }
 
+std::string to_utf8(uint32_t cp) {
+    /*
+    if using C++11 or later, you can do this:
+
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> conv;
+    return conv.to_bytes( (char32_t)cp );
+
+    Otherwise...
+    */
+
+    std::string result;
+
+    int count;
+    if (cp <= 0x007F) {
+        count = 1;
+    }
+    else if (cp <= 0x07FF) {
+        count = 2;
+    }
+    else if (cp <= 0xFFFF) {
+        count = 3;
+    }
+    else if (cp <= 0x10FFFF) {
+        count = 4;
+    }
+    else {
+        return result; // or throw an exception
+    }
+
+    result.resize(count);
+
+    if (count > 1)
+    {
+        for (int i = count-1; i > 0; --i)
+        {
+            result[i] = (char) (0x80 | (cp & 0x3F));
+            cp >>= 6;
+        }
+
+        for (int i = 0; i < count; ++i)
+            cp |= (1 << (7-i));
+    }
+
+    result[0] = (char) cp;
+
+    return result;
+}
+
+void ues_to_utf8(std::string &ues) {
+    std::string::size_type startIdx = 0;
+    do {
+        startIdx = ues.find("\\u", startIdx);
+        if (startIdx == std::string::npos) break;
+
+        std::string::size_type endIdx = ues.find_first_not_of("0123456789abcdefABCDEF", startIdx+2);
+        if (endIdx == std::string::npos) break;
+
+        std::string tmpStr = ues.substr(startIdx+2, endIdx-(startIdx+2));
+        std::istringstream iss(tmpStr);
+
+        uint32_t cp;
+        if (iss >> std::hex >> cp)
+        {
+            std::string utf8 = to_utf8(cp);
+            ues.replace(startIdx, 2+tmpStr.length(), utf8);
+            startIdx += utf8.length();
+        }
+        else {
+            startIdx += 2;
+        }
+    }
+    while (true);
+}
+
 // uuid_alitts <uuid> text=XXXXX saveto=<path> appkey=<key> url=<url>
 SWITCH_STANDARD_API(uuid_alitts_function) {
     if (zstr(cmd)) {
@@ -1023,7 +1099,9 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "process arg: %s = %s\n", var, val);
                 }
                 if (!strcasecmp(var, "text")) {
-                    _text = val;
+                    std::string ues(val);
+                    ues_to_utf8(ues);
+                    _text = switch_core_strdup(pool, ues.c_str());
                     continue;
                 }
                 if (!strcasecmp(var, "saveto")) {
