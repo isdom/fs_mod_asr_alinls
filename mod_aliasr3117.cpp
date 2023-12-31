@@ -1036,7 +1036,9 @@ void ues_to_utf8(std::string &ues) {
         if (startIdx == std::string::npos) break;
 
         std::string::size_type endIdx = ues.find_first_not_of("0123456789abcdefABCDEF", startIdx+2);
-        if (endIdx == std::string::npos) break;
+        if (endIdx == std::string::npos) {
+            endIdx = ues.length() + 1;
+        }
 
         std::string tmpStr = ues.substr(startIdx+2, endIdx-(startIdx+2));
         std::istringstream iss(tmpStr);
