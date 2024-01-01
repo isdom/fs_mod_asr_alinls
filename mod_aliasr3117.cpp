@@ -361,7 +361,7 @@ SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
     request->setTimeout(500);
 
     // 使缺省用 url
-    // request->setUrl(pvt->nls_url);
+    request->setUrl(pvt->nls_url);
 
     // 设置ASR 服务地址, 可使用公网 或 ECS 内网地址，具体参见: https://help.aliyun.com/document_detail/84428.html?spm=a2c4g.148847.0.0.1b704938UF5b6y
     request->setFormat("pcm");
