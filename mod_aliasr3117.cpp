@@ -1057,7 +1057,7 @@ void ues_to_utf8(std::string &ues) {
     while (true);
 }
 
-// uuid_alitts <uuid> text=XXXXX saveto=<path> appkey=<key> url=<url>
+// uuid_alitts <uuid> text=XXXXX saveto=<path> appkey=<key> url=<url> playback_id=<id>
 SWITCH_STANDARD_API(uuid_alitts_function) {
     if (zstr(cmd)) {
         stream->write_function(stream, "uuid_alitts: parameter missing.\n");
@@ -1066,12 +1066,11 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
     }
 
     switch_status_t status = SWITCH_STATUS_SUCCESS;
-    switch_core_session_t *ses = nullptr;
     char *_text = nullptr;
     char *_saveto = nullptr;
     char *_app_key = nullptr;
     char *_url = nullptr;
-
+    char *_playback_id = nullptr;
 
     switch_memory_pool_t *pool;
     switch_core_new_memory_pool(&pool);
@@ -1116,6 +1115,10 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
                 }
                 if (!strcasecmp(var, "url")) {
                     _url = val;
+                    continue;
+                }
+                if (!strcasecmp(var, "playback_id")) {
+                    _playback_id = val;
                     continue;
                 }
             }
@@ -1274,6 +1277,18 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "current request task_id: %s, stop finished, tv: %ld\n",
                           request->getTaskId(), tv_now.tv_sec);
 
+        switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+        if (!ses) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "alitts failed, can't found session by %s\n", argv[0]);
+        } else {
+            char *app_arg = switch_core_sprintf(switch_core_session_get_pool(ses),
+                                                "{vars_playback_id=%s}%s/%s.%s",
+                                                _playback_id, _saveto, request->getTaskId(), "wav" );
+            switch_core_session_execute_application_async(ses, "playback", app_arg);
+            // add rwunlock for BUG: un-released channel, ref: https://blog.csdn.net/xxm524/article/details/125821116
+            //  We meet : ... Locked, Waiting on external entities
+            switch_core_session_rwunlock(ses);
+        }
         /*
          * 6. 完成所有工作后释放当前请求。
          *    请在closed事件(确定完成所有工作)后再释放, 否则容易破坏内部状态机, 会强制卸载正在运行的请求。
