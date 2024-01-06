@@ -1198,7 +1198,8 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
         // 长文本语音合成文档详见: https://help.aliyun.com/document_detail/130509.html
         request->setText(_text);
         // 发音人, 包含"xiaoyun", "ruoxi", "xiaogang"等. 可选参数, 默认是xiaoyun
-        request->setVoice("siqi");
+        // 使用项目中设置的人声配置模型
+        // request->setVoice("siqi");
         // 访问个性化音色，访问的Voice必须是个人定制音色
         //request->setPayloadParam("{\"enable_ptts\":true}");
         // 音量, 范围是0~100, 可选参数, 默认50
