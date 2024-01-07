@@ -1,7 +1,6 @@
 #include <switch.h>
 #include <cmath>
 #include <sys/time.h>
-#include <iostream>
 #include <sstream>
 #include "nlsClient.h"
 #include "nlsEvent.h"
@@ -834,6 +833,7 @@ typedef struct {
     const char *_format;
     pthread_mutex_t mtxWord;
     pthread_cond_t cvWord;
+    switch_memory_pool_t *pool;
 } ali_tts_context_t;
 
 typedef void (*tts_callback_func_t)(NlsEvent *, void *);
@@ -941,16 +941,20 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
 
     if (data.size() > 0) {
         // 以追加形式将二进制音频数据写入文件
-        std::string dir = pvt->_save_path;
-        if (access(dir.c_str(), 0) == -1) {
-            mkdir(dir.c_str(), S_IRWXU);
-        }
+        // std::string dir = pvt->_save_path;
+//        if (access(dir.c_str(), 0) == -1) {
+//            mkdir(dir.c_str(), S_IRWXU);
+//        }
         char file_name[256] = {0};
-        snprintf(file_name, 256, "%s/%s.%s", dir.c_str(), cbEvent->getTaskId(), pvt->_format);
-        FILE* tts_stream = fopen(file_name, "a+");
+        snprintf(file_name, 256, "%s/%s.%s", pvt->_save_path, cbEvent->getTaskId(), pvt->_format);
+
+        switch_file_t *tts_stream = nullptr;
+        switch_file_open(&tts_stream, file_name, SWITCH_FOPEN_CREATE | SWITCH_FOPEN_WRITE | SWITCH_FOPEN_APPEND, SWITCH_FPROT_OS_DEFAULT, pvt->pool);
+        // FILE* tts_stream = fopen(file_name, "a+");
         if (tts_stream) {
-            fwrite((char*)&data[0], data.size(), 1, tts_stream);
-            fclose(tts_stream);
+            switch_size_t nbytes = data.size();
+            switch_file_write(tts_stream, (void*)&data[0], &nbytes);
+            switch_file_close(tts_stream);
         }
     }
 }
@@ -1171,6 +1175,7 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
         // 设置音频合成结束回调函数
         ali_tts_context_t pvt = {0};
 
+        pvt.pool = pool;
         pvt._save_path = _saveto;
         pvt._format = "wav";
         pthread_mutex_init(&pvt.mtxWord, nullptr);
