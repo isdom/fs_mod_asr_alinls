@@ -948,6 +948,9 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
         char file_name[256] = {0};
         snprintf(file_name, 256, "%s/%s.%s", pvt->_save_path, cbEvent->getTaskId(), pvt->_format);
 
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "OnBinaryDataRecved: file_name: %s, data.size() %d\n",
+                          file_name, data.size());
+
         switch_file_t *tts_stream = nullptr;
         switch_file_open(&tts_stream, file_name, SWITCH_FOPEN_CREATE | SWITCH_FOPEN_WRITE | SWITCH_FOPEN_APPEND, SWITCH_FPROT_OS_DEFAULT, pvt->pool);
         // FILE* tts_stream = fopen(file_name, "a+");
@@ -955,6 +958,9 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
             switch_size_t nbytes = data.size();
             switch_file_write(tts_stream, (void*)&data[0], &nbytes);
             switch_file_close(tts_stream);
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "OnBinaryDataRecved: can't open file_name: %s for append\n",
+                              file_name);
         }
     }
 }
@@ -967,8 +973,8 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
 */
 void OnMetaInfo(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
     if (g_debug) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnMetaInfo: All response: %s\n",
-                          cbEvent->getAllResponse());
+        //switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnMetaInfo: All response: %s\n",
+        //                  cbEvent->getAllResponse());
     }
 }
 
