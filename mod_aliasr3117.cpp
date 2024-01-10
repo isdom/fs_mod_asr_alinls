@@ -948,19 +948,17 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
         char file_name[256] = {0};
         snprintf(file_name, 256, "%s/%s.%s", pvt->_save_path, cbEvent->getTaskId(), pvt->_format);
 
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "OnBinaryDataRecved: file_name: %s, data.size() %d\n",
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "OnBinaryDataRecved: file_name: %s, data.size() %ld\n",
                           file_name, data.size());
 
-        switch_file_t *tts_stream = nullptr;
-        switch_file_open(&tts_stream, file_name, SWITCH_FOPEN_CREATE | SWITCH_FOPEN_WRITE | SWITCH_FOPEN_APPEND, SWITCH_FPROT_OS_DEFAULT, pvt->pool);
-        // FILE* tts_stream = fopen(file_name, "a+");
-        if (tts_stream) {
-            switch_size_t nbytes = data.size();
-            switch_file_write(tts_stream, (void*)&data[0], &nbytes);
-            switch_file_close(tts_stream);
-        } else {
+        switch_file_handle_t tts_fh = {0};
+        if (switch_core_file_open(&tts_fh, file_name, 0, 0, SWITCH_FILE_WRITE_APPEND, pvt->pool) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "OnBinaryDataRecved: can't open file_name: %s for append\n",
                               file_name);
+        } else {
+            switch_size_t nbytes = data.size();
+            switch_core_file_write(&tts_fh, (void*)&data[0], &nbytes);
+            switch_core_file_close(&tts_fh);
         }
     }
 }
