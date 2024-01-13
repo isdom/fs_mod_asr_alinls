@@ -952,7 +952,7 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
                           file_name, data.size());
 
         switch_file_handle_t tts_fh = {0};
-        if (switch_core_file_open(&tts_fh, file_name, 0, 0, SWITCH_FILE_FLAG_WRITE | SWITCH_FILE_WRITE_APPEND, pvt->pool) != SWITCH_STATUS_SUCCESS) {
+        if (switch_core_file_open(&tts_fh, file_name, 1, 8000, SWITCH_FILE_FLAG_WRITE | SWITCH_FILE_WRITE_APPEND, pvt->pool) != SWITCH_STATUS_SUCCESS) {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "OnBinaryDataRecved: can't open file_name: %s for append\n",
                               file_name);
         } else {
