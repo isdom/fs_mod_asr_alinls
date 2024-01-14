@@ -828,12 +828,32 @@ SWITCH_STANDARD_API(aliasr_concurrent_cnt_function) {
 
 // ====================================================== TTS ======================================================
 
+typedef void *(*vfs_open_func_t) (const char *path);
+typedef void (*vfs_close_func_t) (void *user_data);
+
+typedef size_t (*vfs_get_filelen_func_t) (void *user_data);
+typedef size_t (*vfs_seek_func_t) (size_t offset, int whence, void *user_data);
+typedef size_t (*vfs_read_func_t) (void *ptr, size_t count, void *user_data);
+typedef size_t (*vfs_write_func_t) (const void *ptr, size_t count, void *user_data);
+typedef size_t (*vfs_tell_func_t) (void *user_data);
+
+typedef struct {
+    vfs_open_func_t vfs_open_func;
+    vfs_close_func_t vfs_close_func;
+    vfs_get_filelen_func_t vfs_get_filelen_func;
+    vfs_seek_func_t vfs_seek_func;
+    vfs_read_func_t vfs_read_func;
+    vfs_write_func_t vfs_write_func;
+    vfs_tell_func_t vfs_tell_func;
+} vfs_func_t;
+
 typedef struct {
     const char *_save_path;
     const char *_format;
     pthread_mutex_t mtxWord;
     pthread_cond_t cvWord;
     switch_memory_pool_t *pool;
+    vfs_func_t *vfs_funcs;
 } ali_tts_context_t;
 
 typedef void (*tts_callback_func_t)(NlsEvent *, void *);
@@ -951,14 +971,14 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "OnBinaryDataRecved: file_name: %s, data.size() %ld\n",
                           file_name, data.size());
 
-        switch_file_handle_t tts_fh = {0};
-        if (switch_core_file_open(&tts_fh, file_name, 1, 8000, SWITCH_FILE_FLAG_WRITE | SWITCH_FILE_WRITE_APPEND, pvt->pool) != SWITCH_STATUS_SUCCESS) {
+        void *tts_file = pvt->vfs_funcs->vfs_open_func(file_name);
+        if (tts_file) {
+            pvt->vfs_funcs->vfs_seek_func(0, SEEK_END, tts_file);
+            pvt->vfs_funcs->vfs_write_func((void*)&data[0], data.size(), tts_file);
+            pvt->vfs_funcs->vfs_close_func(tts_file);
+        } else {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "OnBinaryDataRecved: can't open file_name: %s for append\n",
                               file_name);
-        } else {
-            switch_size_t nbytes = data.size();
-            switch_core_file_write(&tts_fh, (void*)&data[0], &nbytes);
-            switch_core_file_close(&tts_fh);
         }
     }
 }
@@ -1179,9 +1199,28 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
         // 设置音频合成结束回调函数
         ali_tts_context_t pvt = {0};
 
+        {
+            switch_core_session_t *ses = switch_core_session_force_locate(argv[0]);
+            if (!ses) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "alitts failed, can't found session by %s\n", argv[0]);
+                switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+            } else {
+                switch_channel_t *channel = switch_core_session_get_channel(session);
+                auto vfs_funcs = (vfs_func_t*)switch_channel_get_private(channel, "vfs_mem");
+                switch_core_session_rwunlock(ses);
+                if (!vfs_funcs) {
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "alitts failed, can't found vfs_mem %s\n", argv[0]);
+                    switch_goto_status(SWITCH_STATUS_SUCCESS, end);
+                }
+                pvt.vfs_funcs = vfs_funcs;
+            }
+        }
+
         pvt.pool = pool;
         pvt._save_path = _saveto;
         pvt._format = "wav";
+
+        // TODO: release mutex & cond
         pthread_mutex_init(&pvt.mtxWord, nullptr);
         pthread_cond_init(&pvt.cvWord, nullptr);
 
