@@ -968,8 +968,8 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
         char file_name[256] = {0};
         snprintf(file_name, 256, "%s/%s.%s", pvt->_save_path, cbEvent->getTaskId(), pvt->_format);
 
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "OnBinaryDataRecved: file_name: %s, data.size() %ld\n",
-                          file_name, data.size());
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnBinaryDataRecved: file_name: %s, data.size() %ld, vfs: %p\n",
+                          file_name, data.size(), pvt->vfs_funcs);
 
         void *tts_file = pvt->vfs_funcs->vfs_open_func(file_name);
         if (tts_file) {
@@ -1205,7 +1205,7 @@ SWITCH_STANDARD_API(uuid_alitts_function) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "alitts failed, can't found session by %s\n", argv[0]);
                 switch_goto_status(SWITCH_STATUS_SUCCESS, end);
             } else {
-                switch_channel_t *channel = switch_core_session_get_channel(session);
+                switch_channel_t *channel = switch_core_session_get_channel(ses);
                 auto vfs_funcs = (vfs_func_t*)switch_channel_get_private(channel, "vfs_mem");
                 switch_core_session_rwunlock(ses);
                 if (!vfs_funcs) {
