@@ -411,12 +411,6 @@ static void cancel_ali_asr(ali_asr_context_t *pvt);
 
 static void destroy_ali_asr(ali_asr_context_t *pvt);
 
-static void
-gen_tts_audio(const char *_text, const char *_saveto, const char *_app_key, const char *_url, vfs_func_t *vfs_funcs,
-              switch_memory_pool_t *pool);
-
-static void play_tts_audio(const char *_saveto, const char *_playback_id, char *const *argv);
-
 static const asr_provider_t ali_asr_provider_funcs = {
         init_ali_asr,
         reinterpret_cast<asr_start_func_t>(start_ali_asr),
