@@ -16,10 +16,16 @@ using AlibabaNls::NlsEvent;
 using AlibabaNls::SpeechTranscriberRequest;
 
 
-const char *g_ak_id = nullptr;
-const char *g_ak_secret = nullptr;
-std::string g_token = "";
-long g_expireTime = -1;
+const char *g_asr_ak_id = nullptr;
+const char *g_asr_ak_secret = nullptr;
+std::string g_asr_token = "";
+long g_asr_expireTime = -1;
+
+const char *g_tts_ak_id = nullptr;
+const char *g_tts_ak_secret = nullptr;
+std::string g_tts_token = "";
+long g_tts_expireTime = -1;
+
 bool g_debug = false;
 
 typedef struct {
@@ -327,10 +333,10 @@ void onAsrChannelClosed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
 SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
     time_t now;
     time(&now);
-    if (g_expireTime - now < 10) {
+    if (g_asr_expireTime - now < 10) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                          "the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret\n");
-        if (-1 == generateToken(g_ak_id, g_ak_secret, &g_token, &g_expireTime)) {
+                          "the ASR token will be expired, please generate new ASR token by AccessKey-ID and AccessKey-Secret\n");
+        if (-1 == generateToken(g_asr_ak_id, g_asr_ak_secret, &g_asr_token, &g_asr_expireTime)) {
             return nullptr;
         }
     }
@@ -381,7 +387,7 @@ SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
         request->setMaxSentenceSilence(atoi(pvt->vad_threshold));
     }
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
-    request->setToken(g_token.c_str());
+    request->setToken(g_asr_token.c_str());
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, vol multiplier is:%f\n",
                           pvt->nls_url, pvt->vol_multiplier);
@@ -490,12 +496,20 @@ static switch_status_t load_config(switch_memory_pool_t *pool) {
         char *val = (char *) switch_xml_attr_soft(param, "value");
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Read conf: %s = %s\n", var, val);
         //strcasecmp：忽略大小写比较字符串（二进制）
-        if (!strcasecmp(var, "akid")) {
-            g_ak_id = switch_core_strdup(pool, val);
+        if (!strcasecmp(var, "asr_akid")) {
+            g_asr_ak_id = switch_core_strdup(pool, val);
             continue;
         }
-        if (!strcasecmp(var, "aksecret")) {
-            g_ak_secret = switch_core_strdup(pool, val);
+        if (!strcasecmp(var, "asr_aksecret")) {
+            g_asr_ak_secret = switch_core_strdup(pool, val);
+            continue;
+        }
+        if (!strcasecmp(var, "tts_akid")) {
+            g_tts_ak_id = switch_core_strdup(pool, val);
+            continue;
+        }
+        if (!strcasecmp(var, "tts_aksecret")) {
+            g_tts_ak_secret = switch_core_strdup(pool, val);
             continue;
         }
         if (!strcasecmp(var, "debug")) {
@@ -1092,10 +1106,10 @@ static switch_status_t gen_tts_audio(const char *_text, const char *_saveto, con
                           switch_memory_pool_t *pool) {
     time_t now;
     time(&now);
-    if (g_expireTime - now < 10) {
+    if (g_tts_expireTime - now < 10) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                           "uuid_alitts: the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret\n");
-        if (-1 == generateToken(g_ak_id, g_ak_secret, &g_token, &g_expireTime)) {
+        if (-1 == generateToken(g_tts_ak_id, g_tts_ak_secret, &g_tts_token, &g_tts_expireTime)) {
             return SWITCH_STATUS_FALSE;
         }
     }
@@ -1186,7 +1200,7 @@ static switch_status_t gen_tts_audio(const char *_text, const char *_saveto, con
     // 设置AppKey, 必填参数, 请参照官网申请
     request->setAppKey(_app_key);
     // 设置账号校验token, 必填参数
-    request->setToken(g_token.c_str());
+    request->setToken(g_tts_token.c_str());
 
     if (_url != nullptr) {
         request->setUrl(_url);
