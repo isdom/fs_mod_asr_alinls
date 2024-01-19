@@ -16,6 +16,9 @@ using AlibabaNls::NlsEvent;
 using AlibabaNls::SpeechTranscriberRequest;
 
 
+switch_mutex_t *g_asr_lock = nullptr;
+switch_mutex_t *g_tts_lock = nullptr;
+
 const char *g_asr_ak_id = nullptr;
 const char *g_asr_ak_secret = nullptr;
 std::string g_asr_token = "";
@@ -331,15 +334,21 @@ void onAsrChannelClosed(NlsEvent *cbEvent, ali_asr_context_t *pvt) {
  * @return SpeechTranscriberRequest* 
  */
 SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
-    time_t now;
-    time(&now);
-    if (g_asr_expireTime - now < 10) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                          "the ASR token will be expired, please generate new ASR token by AccessKey-ID and AccessKey-Secret\n");
-        if (-1 == generateToken(g_asr_ak_id, g_asr_ak_secret, &g_asr_token, &g_asr_expireTime)) {
-            return nullptr;
+    switch_mutex_lock(g_asr_lock);
+    {
+        time_t now;
+        time(&now);
+        if (g_asr_expireTime - now < 10) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+                              "the ASR token will be expired, please generate new ASR token by AccessKey-ID and AccessKey-Secret\n");
+            if (-1 == generateToken(g_asr_ak_id, g_asr_ak_secret, &g_asr_token, &g_asr_expireTime)) {
+                switch_mutex_unlock(g_asr_lock);
+                return nullptr;
+            }
         }
     }
+    switch_mutex_unlock(g_asr_lock);
+
     SpeechTranscriberRequest *request = NlsClient::getInstance()->createTranscriberRequest("cpp", false);
     if (request == nullptr) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "createTranscriberRequest failed.\n");
@@ -1104,15 +1113,20 @@ void ues_to_utf8(std::string &ues) {
 
 static switch_status_t gen_tts_audio(const char *_text, const char *_saveto, const char *_app_key, const char *_url, vfs_func_t *vfs_funcs,
                           switch_memory_pool_t *pool) {
-    time_t now;
-    time(&now);
-    if (g_tts_expireTime - now < 10) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                          "uuid_alitts: the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret\n");
-        if (-1 == generateToken(g_tts_ak_id, g_tts_ak_secret, &g_tts_token, &g_tts_expireTime)) {
-            return SWITCH_STATUS_FALSE;
+    switch_mutex_lock(g_tts_lock);
+    {
+        time_t now;
+        time(&now);
+        if (g_tts_expireTime - now < 10) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+                              "uuid_alitts: the TTS token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret\n");
+            if (-1 == generateToken(g_tts_ak_id, g_tts_ak_secret, &g_tts_token, &g_tts_expireTime)) {
+                switch_mutex_unlock(g_tts_lock);
+                return SWITCH_STATUS_FALSE;
+            }
         }
     }
+    switch_mutex_unlock(g_tts_lock);
 
     /*
      * 1. 创建语音识别SpeechSynthesizerRequest对象.
@@ -1267,6 +1281,9 @@ static switch_status_t gen_tts_audio(const char *_text, const char *_saveto, con
     NlsClient::getInstance()->releaseSynthesizerRequest(request);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "release Synthesizer success.\n");
 
+    pthread_mutex_destroy(&pvt.mtxWord);
+    pthread_cond_destroy(&pvt.cvWord);
+
     return SWITCH_STATUS_SUCCESS;
 }
 
@@ -1408,6 +1425,9 @@ SWITCH_STANDARD_API(mod_aliasr_debug)
  *  定义load函数，加载时运行
  */
 SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
+    switch_mutex_init(&g_asr_lock, SWITCH_MUTEX_NESTED, pool);
+    switch_mutex_init(&g_tts_lock, SWITCH_MUTEX_NESTED, pool);
+
     if (load_config(pool) != SWITCH_STATUS_SUCCESS) {
         return SWITCH_STATUS_FALSE;
     }
@@ -1453,6 +1473,9 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aliasr_shutdown) {
     switch_core_remove_state_handler(&ali_asr_cs_handlers);
 
     NlsClient::releaseInstance();
+
+    switch_mutex_destroy(g_asr_lock);
+    switch_mutex_destroy(g_tts_lock);
 
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " mod_aliasr_shutdown called\n");
 
