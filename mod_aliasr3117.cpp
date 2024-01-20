@@ -994,8 +994,10 @@ void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
 //        char file_name[256] = {0};
 //        snprintf(file_name, 256, "%s/%s.%s", pvt->_save_path, cbEvent->getTaskId(), pvt->_format);
 
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnBinaryDataRecved: file_name: %s, data.size() %ld, vfs: %p\n",
-                          pvt->_save_path, data.size(), pvt->vfs_funcs);
+        if (g_debug) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "OnBinaryDataRecved: file_name: %s, data.size() %ld, vfs: %p\n",
+                              pvt->_save_path, data.size(), pvt->vfs_funcs);
+        }
 
         void *tts_file = pvt->vfs_funcs->vfs_open_func(pvt->_save_path);
         if (tts_file) {
