@@ -1433,8 +1433,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load) {
     if (load_config(pool) != SWITCH_STATUS_SUCCESS) {
         return SWITCH_STATUS_FALSE;
     }
+//    int ret = AlibabaNls::NlsClient::getInstance()->setLogConfig(
+//            "/usr/local/freeswitch/log/nls-transcriber", AlibabaNls::LogDebug, 400, 50);
     int ret = AlibabaNls::NlsClient::getInstance()->setLogConfig(
-            "/usr/local/freeswitch/log/nls-transcriber", AlibabaNls::LogDebug, 400, 50);
+            "/usr/local/freeswitch/log/nls-transcriber", AlibabaNls::LogInfo, 100, 5);
     if (-1 == ret) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "set log failed\n");
         return SWITCH_STATUS_FALSE;
