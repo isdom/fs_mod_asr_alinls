@@ -15,7 +15,7 @@ using AlibabaNls::SpeechTranscriberRequest;
 
 const char *g_ak_id = nullptr;
 const char *g_ak_secret = nullptr;
-std::string g_token = "";
+char *g g_token = "";
 long g_expireTime = -1;
 bool g_debug = false;
 
