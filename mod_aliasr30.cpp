@@ -15,7 +15,7 @@ using AlibabaNls::SpeechTranscriberRequest;
 
 const char *g_ak_id = nullptr;
 const char *g_ak_secret = nullptr;
-char *g g_token = "";
+char *g_token = nullptr;
 long g_expireTime = -1;
 bool g_debug = false;
 
@@ -84,7 +84,7 @@ SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt);
  * 根据AccessKey ID和AccessKey Secret重新生成一个token，
  * 并获取其有效期时间戳
  */
-int generateToken(const char *akId, const char *akSecret, std::string *token, long *expireTime) {
+int generateToken(const char *akId, const char *akSecret, char **token, long *expireTime) {
     NlsToken nlsTokenRequest;
     nlsTokenRequest.setAccessKeyId(akId);
     nlsTokenRequest.setKeySecret(akSecret);
@@ -100,8 +100,11 @@ int generateToken(const char *akId, const char *akSecret, std::string *token, lo
                           nlsTokenRequest.getErrorMsg());
         return -1;
     }
-    *token = nlsTokenRequest.getToken();
-    if (token->empty()) {
+    if ( *token != nullptr) {
+        free(*token);
+    }
+    *token = strdup(nlsTokenRequest.getToken());
+    if (strcmp(*token, "") == 0) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "generateToken Failed: token is '' \n");
         return -1;
     }
@@ -374,7 +377,7 @@ SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
         request->setMaxSentenceSilence(atoi(pvt->vad_threshold));
     }
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
-    request->setToken(g_token.c_str());
+    request->setToken(g_token);
     if (g_debug) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, vol multiplier is:%f\n",
                           pvt->nls_url, pvt->vol_multiplier);
