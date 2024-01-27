@@ -40,9 +40,9 @@ typedef struct {
     float vol_multiplier = 0.0f;
 } switch_da_t;
 
-std::string g_akId = "";
-std::string g_akSecret = "";
-std::string g_token = "";
+char *g_akId = nullptr;
+char *g_akSecret = nullptr;
+char *g_token = nullptr;
 long g_expireTime = -1;
 
 // begin for 3.1
