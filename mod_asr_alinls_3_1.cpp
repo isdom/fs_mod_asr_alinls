@@ -58,8 +58,8 @@ SpeechTranscriberRequest *generateAsrRequest(AsrParamCallBack *cbParam, switch_d
  * 根据AccessKey ID和AccessKey Secret重新生成一个token，
  * 并获取其有效期时间戳
  */
-int generateToken(std::string akId, std::string akSecret,
-                  std::string *token, long *expireTime) {
+int generateToken(char *akId, char *akSecret,
+                  char **token, long *expireTime) {
     AlibabaNlsCommon::NlsToken nlsTokenRequest;
     nlsTokenRequest.setAccessKeyId(akId);
     nlsTokenRequest.setKeySecret(akSecret);
@@ -84,9 +84,12 @@ int generateToken(std::string akId, std::string akSecret,
                           nlsTokenRequest.getErrorMsg());
         return retCode;
     }
+    if (*token != nullptr) {
+        free(*token);
+    }
 
-    *token = nlsTokenRequest.getToken();
-    if (token->empty()) {
+    *token = strdup(nlsTokenRequest.getToken());
+    if (strcmp(*token, "")==0) {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "generateToken Failed: token is '' \n");
         return -1;
     }
@@ -395,7 +398,7 @@ SpeechTranscriberRequest *generateAsrRequest(AsrParamCallBack *cbParam, switch_d
     // 设置是否在后处理中添加标点, 可选参数. 默认false
     request->setInverseTextNormalization(true);
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
-    request->setToken(g_token.c_str());
+    request->setToken(g_token);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "nls url is:%s, speech_noise_threshold is:%s, vol multiplier is:%f\n",
                       pvt->nlsurl, pvt->speech_noise_threshold, pvt->vol_multiplier);
     return request;
