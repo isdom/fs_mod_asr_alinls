@@ -46,8 +46,8 @@ char *g_token = nullptr;
 long g_expireTime = -1;
 
 // begin for 3.1
-std::string g_domain = "";
-std::string g_api_version = "";
+char *g_domain = nullptr;
+char *g_api_version = nullptr;
 // end for 3.1
 
 bool g_debug = false;
