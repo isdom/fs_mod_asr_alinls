@@ -63,10 +63,10 @@ int generateToken(char *akId, char *akSecret,
     AlibabaNlsCommon::NlsToken nlsTokenRequest;
     nlsTokenRequest.setAccessKeyId(akId);
     nlsTokenRequest.setKeySecret(akSecret);
-    if (!g_domain.empty()) {
+    if (g_domain != nullptr) {
         nlsTokenRequest.setDomain(g_domain);
     }
-    if (!g_api_version.empty()) {
+    if (g_api_version != nullptr) {
         nlsTokenRequest.setServerVersion(g_api_version);
     }
 
