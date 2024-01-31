@@ -613,7 +613,7 @@ static void *init_ali_asr(switch_core_session_t *session, const switch_codec_imp
     pvt->vad_threshold = _vad_threshold ? switch_core_session_strdup(session, _vad_threshold) : nullptr;
     pvt->asr_dec_vol = _asr_dec_vol ? switch_core_session_strdup(session, _asr_dec_vol) : nullptr;
     if (pvt->asr_dec_vol) {
-        double db = atof(pvt->asr_dec_vol);
+        double db = strtod(pvt->asr_dec_vol, nullptr);
         pvt->vol_multiplier = pow(10, db / 20);
     }
     switch_mutex_init(&pvt->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
