@@ -396,7 +396,7 @@ SpeechTranscriberRequest *generateAsrRequest(ali_asr_context_t *pvt) {
         // 合法参数范围200～2000(ms), 默认值800ms.
         // vad断句与语义断句为互斥关系, 不能同时使用.
         // 调用此设置前, 请将语义断句setSemanticSentenceDetection设置为false.
-        request->setMaxSentenceSilence(atoi(pvt->vad_threshold));
+        request->setMaxSentenceSilence((int)strtol(pvt->vad_threshold, nullptr, 10));
     }
     // 设置是否在后处理中执行数字转写, 可选参数. 默认false
     request->setToken(g_asr_token);
