@@ -988,7 +988,7 @@ void OnSynthesisChannelClosed(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* 
 void OnBinaryDataRecved(AlibabaNls::NlsEvent* cbEvent, ali_tts_context_t* pvt) {
     std::vector<unsigned char> data = cbEvent->getBinaryData(); // getBinaryData() 获取文本合成的二进制音频数据
 
-    if (data.size() > 0) {
+    if (!data.empty()) {
         // 以追加形式将二进制音频数据写入文件
         // std::string dir = pvt->_save_path;
 //        if (access(dir.c_str(), 0) == -1) {
