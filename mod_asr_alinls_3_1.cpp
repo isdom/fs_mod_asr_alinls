@@ -73,7 +73,7 @@ int generateToken(char *akId, char *akSecret,
     //打印请求token的参数
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "begin send generate token rquest: akId=%s, akSecret=%s, domain=%s, api_version=%s\n",
-                      akId.c_str(), akSecret.c_str(), g_domain.c_str(), g_api_version.c_str());
+                      akId.c_str(), akSecret.c_str(), g_domain, g_api_version);
     int retCode = nlsTokenRequest.applyNlsToken();
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
                       "request success, status code=%d, token=%s, expireTime=%d, message=%s\n", retCode,
