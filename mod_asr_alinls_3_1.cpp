@@ -40,14 +40,14 @@ typedef struct {
     float vol_multiplier = 0.0f;
 } switch_da_t;
 
-char *g_akId = nullptr;
-char *g_akSecret = nullptr;
+const char *g_akId = nullptr;
+const char *g_akSecret = nullptr;
 char *g_token = nullptr;
 long g_expireTime = -1;
 
 // begin for 3.1
-char *g_domain = nullptr;
-char *g_api_version = nullptr;
+const char *g_domain = nullptr;
+const char *g_api_version = nullptr;
 // end for 3.1
 
 bool g_debug = false;
